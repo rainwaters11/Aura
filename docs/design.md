@@ -96,7 +96,7 @@ For `params.amountSpecified < 0`:
 2. Verify the supplied `PoolKey` hashes to the immutable Aura pool ID.
 3. Decode and validate `AuraOrderData`.
 4. Derive `amountIn = uint256(-params.amountSpecified)` with checked conversion.
-5. Verify direction, amount, nonce, owner, recipient, deadline, minimum output, and batch capacity.
+5. Verify direction, amount, nonce, owner, recipient, deadline, minimum output, batch capacity, and aggregate signed-delta bounds.
 6. Compute an immutable `orderId`.
 7. Call `super._beforeSwap(sender, key, params, hookData)`.
 8. `BaseAsyncSwap` takes the full specified input as an ERC-6909 claim owned by the hook and returns:
@@ -117,6 +117,7 @@ For `params.amountSpecified >= 0`, Aura does not park the order. Exact-output be
 - A batch becomes `READY` only when it contains at least one order in each direction and at least two total orders.
 - The hook rejects an order that would exceed `MAX_BATCH_ORDERS`.
 - Additional orders may join a ready batch only until its deterministic close condition. The demo configuration closes at 4 orders or at the configured block window.
+- Reaching 4 orders closes the batch in the parking transaction. After the block window, anyone may call `closeBatch(batchId)`; it closes a two-sided batch or makes a one-sided batch refundable. Closure freezes membership and emits `BatchClosed(batchId, orderCount, orderIdsHash, referenceSqrtPriceX96)`. The canonical hash is `keccak256(abi.encode(batchOrderIds[batchId]))` in stored order. `BatchReady` is only an early eligibility signal and never authorizes dispatch or settlement.
 - A batch with only one direction never settles in the MVP. After timeout, its orders become refundable.
 
 ### 4.5 Settlement entry
@@ -131,7 +132,7 @@ It requires:
 
 - `msg.sender == reactiveCallbackProxy`.
 - `rvmId == expectedRvmId`.
-- The batch is `READY`.
+- The batch is `READY` and has been closed, and the solution's order count and membership hash equal the frozen `BatchClosed` snapshot.
 - The solution has not expired or been used.
 - `solutionHash` equals the canonical hash of every solution field.
 
@@ -344,6 +345,8 @@ $$
 
 If the cross products are equal, `residualAmountIn` must be zero. A nonzero residual must match the derived direction and amount exactly.
 
+Order admission maintains checked token0-input and token1-input aggregates and requires each aggregate to remain at most `type(int128).max`. Consequently every derived residual also fits PoolManager's signed `BalanceDelta` representation. This is stricter than the `uint128` storage fields by design: the installed v4 `Pool.swap` converts final swap amounts with `toInt128()`. An order that would cross either aggregate bound reverts at parking rather than creating a batch that can only time out. Aggregate payout calculations and every amount passed to `swap`, `mint`, `burn`, `take`, or delta conversion are checked against the applicable installed-v4 signed range before interaction.
+
 ### 7.4 Realized conservation
 
 The hook measures the residual swap's actual `BalanceDelta`; it never trusts a quoted output. Let $A_0$ or $A_1$ be actual output received from the pool and $D_0$, $D_1$ be explicitly recorded dust.
@@ -408,7 +411,7 @@ The entrypoint is non-reentrant. A callback failure reverts the prior balance de
 
 ## 10. Timeout and refunds
 
-`MAX_BATCH_WINDOW` is a compile-time or immutable block count fixed at deployment and disclosed in `BASELINE.md`.
+`MAX_BATCH_WINDOW` is fixed to 20 blocks for the MVP, as recorded in `BASELINE.md`. The close boundary is `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW`; implementations and tests must use this strict comparison without a wall-clock substitute.
 
 When `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW` and the batch has not settled:
 
