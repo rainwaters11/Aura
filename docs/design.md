@@ -221,7 +221,6 @@ struct BatchSolution {
 
 struct ClaimData {
     bytes32 poolId;
-    bytes32 orderId;
     address account;
     address recipient;
     address currency;
@@ -230,6 +229,8 @@ struct ClaimData {
 ```
 
 `orderIds[i]` and `payouts[i]` are index-aligned. The payout currency is derived from the stored order direction and cannot be selected independently by the solver.
+
+`ClaimData` is account- and currency-scoped because `claimableBalances` aggregates liabilities from any number of settled orders. It intentionally contains no `orderId`; the canonical claim payload is exactly `(poolId, account, recipient, currency, amount)`, and the callback validates those fields against the active claim unlock context.
 
 The order ID is:
 
@@ -500,14 +501,15 @@ The following properties must hold in tests and production:
 
 1. **Router identity:** only `AuraRouter` can create Aura orders, and the router cannot forge `owner`.
 2. **Pool binding:** all order, claim, and settlement accounting belongs to the immutable Aura pool.
-3. **Parking neutrality:** parking never changes pool price, tick, liquidity, or reserves.
-4. **Backing:** claimable liabilities plus protocol dust never exceed hook ERC-6909 holdings per pool and currency.
-5. **Conservation:** settlement closes the PoolManager unlock with zero unresolved currency deltas.
-6. **Uniformity:** every executed order uses the same directed rational price and deterministic rounding rule.
-7. **Minimum output:** no order settles below its `minAmountOut`.
-8. **One execution:** an order leaves `PARKED` exactly once, by settlement or cancellation.
-9. **Replay resistance:** a batch and solution hash settle at most once.
-10. **Bounded work:** settlement cannot iterate more than `MAX_BATCH_ORDERS`.
+3. **Parking curve neutrality:** parking never changes pool price, tick, active liquidity, or other AMM curve state. PoolManager's underlying token custody increases when the router settles the parked input delta.
+4. **Parking custody backing:** for each parked ERC-20 input, the increase in PoolManager custody equals the input backing added for the hook's newly minted ERC-6909 claim; tests assert the custody and claim deltas rather than requiring unchanged reserves.
+5. **Backing:** claimable liabilities plus protocol dust never exceed hook ERC-6909 holdings per pool and currency.
+6. **Conservation:** settlement closes the PoolManager unlock with zero unresolved currency deltas.
+7. **Uniformity:** every executed order uses the same directed rational price and deterministic rounding rule.
+8. **Minimum output:** no order settles below its `minAmountOut`.
+9. **One execution:** an order leaves `PARKED` exactly once, by settlement or cancellation.
+10. **Replay resistance:** a batch and solution hash settle at most once.
+11. **Bounded work:** settlement cannot iterate more than `MAX_BATCH_ORDERS`.
 11. **Callback authentication:** both callback proxy and injected RVM identity must match immutable configuration.
 12. **Unlock authentication:** only PoolManager can invoke `unlockCallback`, and only an active action context is accepted.
 13. **Claim CEI:** liability is reduced before the external unlock and claim entry is non-reentrant.
