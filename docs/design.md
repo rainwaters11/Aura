@@ -1,7 +1,7 @@
 # Aura Protocol and System Architecture
 
 Status: normative MVP specification  
-Version: 1.2  
+Version: 1.3  
 Baseline: `rainwaters11/Argos_LTS@4603269e8af7dbbff6e337546fd9d7be27deb34c`  
 Target: Unichain Sepolia, chain ID 1301  
 Compiler: Solidity 0.8.30, Cancun EVM
@@ -57,7 +57,9 @@ When two documents disagree, the higher item controls. Ambiguity is a build bloc
 | `AuraHook` | Parks inputs, validates solutions, performs residual execution, accounts for claims, and processes refunds. | Protocol authority. It verifies every externally supplied field. |
 | `AuraClearingMath` | Full-precision rational-price, payout, residual, and conservation calculations. | Pure library with fuzz and invariant coverage. |
 | `PoolManager` | Holds underlying assets, ERC-6909 claims, pool liquidity, and flash-accounting deltas. | Canonical Uniswap v4 dependency. |
-| `ReactiveBatchDispatcher` | Subscribes to Aura events and sends bounded settlement callbacks. | Trigger and proposal source only. Its payload is untrusted until validated by `AuraHook`. |
+| Production `AuraSolutionBuilder` | Reads finalized Unichain state through RPC and the pinned v4 state-view interfaces, simulates complete residual execution, and publishes a bounded solution. | Operational proposal source only. It never holds funds, and every proposal remains untrusted by `AuraHook`. |
+| `AuraSolutionInbox` | Accepts a bounded encoded solution from the configured MVP publisher and emits `SolutionProposed` for Reactive transport. | Rate-limited/authenticated event ingress only. Compromise can waste callback funding but cannot bypass destination validation or block refunds. |
+| `ReactiveBatchDispatcher` | Subscribes to Aura batch events plus `SolutionProposed`, verifies the frozen membership and canonical solution envelope, and sends the exact bounded callback. | Authenticated transport only. ReactVM does not quote Uniswap pool state. |
 | Reactive callback proxy | Delivers the callback and injects the RVM identity. | Authorized transport. Both proxy and RVM identity are checked. |
 | Frontend | Places orders and displays indexed state. | Untrusted convenience layer. Never an accounting source. |
 
@@ -96,7 +98,7 @@ For `params.amountSpecified < 0`:
 2. Verify the supplied `PoolKey` hashes to the immutable Aura pool ID.
 3. Decode and validate `AuraOrderData`.
 4. Derive `amountIn = uint256(-params.amountSpecified)` with checked conversion.
-5. Verify direction, amount, nonce, owner, recipient, deadline, batch capacity, `amountIn <= type(int128).max`, `minAmountOut <= type(int128).max`, and checked aggregate signed-delta bounds.
+5. Verify direction, amount, nonce, owner, recipient, deadline, batch capacity, `amountIn <= type(int128).max`, `0 < minAmountOut <= type(int128).max`, checked per-direction input aggregates, and checked per-output-currency aggregate minimum liabilities. Each aggregate must remain at most `type(int128).max` after admitting the order.
 6. Compute an immutable `orderId`.
 7. Call `super._beforeSwap(sender, key, params, hookData)`.
 8. `BaseAsyncSwap` takes the full specified input as an ERC-6909 claim owned by the hook and returns:
@@ -230,7 +232,7 @@ struct ClaimData {
 
 `orderIds[i]` and `payouts[i]` are index-aligned. The payout currency is derived from the stored order direction and cannot be selected independently by the solver.
 
-`ClaimData` is account- and currency-scoped because `claimableBalances` aggregates liabilities from any number of settled orders. It intentionally contains no `orderId`; the canonical claim payload is exactly `(poolId, account, recipient, currency, amount)`, and the callback validates those fields against the active claim unlock context.
+`ClaimData` is account- and currency-scoped because `claimableBalances` aggregates liabilities from any number of settled orders. It intentionally contains no `orderId`; the canonical claim payload is exactly `(poolId, account, recipient, currency, amount)`, and the callback validates those fields against the active claim unlock context. Although `amount` is stored as `uint128`, every claim entrypoint and callback additionally require `amount <= type(int128).max` before any PoolManager operation.
 
 The order ID uses this exact type hash and ABI preimage:
 
@@ -303,6 +305,10 @@ mapping(uint64 batchId => bytes32[]) internal batchOrderIds;
 mapping(uint64 batchId => BatchStatus) public batchStatus;
 mapping(uint64 batchId => uint64) public openedAtBlock;
 mapping(uint64 batchId => uint64) public closedAtBlock;
+mapping(uint64 batchId => uint256) public aggregateToken0Input;
+mapping(uint64 batchId => uint256) public aggregateToken1Input;
+mapping(uint64 batchId => uint256) public aggregateMinToken0Output;
+mapping(uint64 batchId => uint256) public aggregateMinToken1Output;
 mapping(bytes32 solutionHash => bool) public usedSolutions;
 mapping(PoolId poolId => mapping(address account => mapping(Currency token => uint256 amount)))
     public claimableBalances;
@@ -387,7 +393,9 @@ $$
 
 If the cross products are equal, `residualAmountIn` must be zero. A nonzero residual must match the derived direction and amount exactly.
 
-Order admission requires each `amountIn` and `minAmountOut`, plus each checked token0-input and token1-input aggregate, to remain at most `type(int128).max`. Consequently every derived residual fits PoolManager's signed `BalanceDelta` representation, and no accepted order requires an individually unmintable minimum output. This is stricter than the `uint128` storage fields by design: the installed v4 PoolManager converts relevant deltas and mint operations with signed `int128` bounds. An order that crosses an individual or aggregate bound reverts at parking rather than creating a batch that can only time out. Candidate validation also requires every payout and each per-currency aggregate amount passed to `swap`, `mint`, `burn`, `take`, or delta conversion to fit the applicable installed-v4 signed range before interaction.
+Order admission rejects zero `amountIn` or zero `minAmountOut`. Each individual value, each checked token0-input and token1-input aggregate, and each aggregate minimum-output liability by output currency must remain at most `type(int128).max` after adding the order. A token0-input order increments `aggregateMinToken1Output`; a token1-input order increments `aggregateMinToken0Output`. All additions use checked `uint256` arithmetic before the signed-range comparison. This conservative admission bound prevents a bounded batch from accumulating minimum liabilities that no installed-v4 signed operation can represent, while full liquidity feasibility remains the production solution builder's responsibility.
+
+Candidate validation also requires total computed payout liability `Q_0` and `Q_1`, every individual payout, and every amount passed to `swap`, `mint`, `burn`, `take`, or delta conversion to fit the applicable installed-v4 signed range before interaction. Consequently every derived residual fits PoolManager's signed `BalanceDelta` representation. An order that crosses an individual input, aggregate input, or aggregate minimum-output bound reverts during parking instead of creating a representationally impossible batch that can only time out.
 
 ### 7.4 Realized conservation
 
@@ -421,6 +429,19 @@ $$
 
 If actual pool output cannot fully back all payouts, settlement reverts. If output exceeds liabilities, the excess is minted as a hook-owned ERC-6909 dust claim and recorded by pool and currency.
 
+### 7.5 Production residual quoting
+
+ReactVM has no authoritative RPC or complete Uniswap v4 tick-state view and therefore must not quote residual execution. The production `AuraSolutionBuilder` is the only MVP component responsible for pre-dispatch quoting. After final `BatchClosed` evidence, it:
+
+1. reads the finalized PoolManager slot0, liquidity, LP and protocol fees, tick bitmap, and every initialized tick crossed by the candidate through a configured Unichain Sepolia RPC and the pinned v4 state-view interfaces;
+2. records the source block number and block hash in operator evidence;
+3. runs integer-identical pinned v4 swap math for the exact residual and proposed `sqrtPriceLimitX96`;
+4. applies the realized-conservation equations to the simulated output;
+5. re-reads the source block before publishing and abandons the candidate if the state changed; and
+6. submits the bounded `BatchSolution` to `AuraSolutionInbox`, which emits the proposal for Reactive delivery.
+
+The configured publisher is an operational spam-control boundary, not a settlement authority. `AuraHook` still recomputes all deterministic order math, executes against live PoolManager state, measures the actual `BalanceDelta`, and atomically reverts a stale or underfunded proposal. Builder, inbox, RPC, or Reactive failure cannot block the permissionless refund path.
+
 ## 8. Settlement accounting sequence
 
 Within the settlement unlock:
@@ -441,15 +462,16 @@ No arbitrary calls, tokens, pools, recipients, or interactions can be supplied i
 
 `claimTokens(PoolId poolId, Currency token, address recipient, uint256 amount)` follows checks, effects, interactions:
 
-1. Require a nonzero recipient and amount.
+1. Require a nonzero recipient and `0 < amount <= uint256(type(int128).max)`.
 2. Require `amount <= claimableBalances[poolId][msg.sender][token]`.
-3. Decrement the claimable balance before unlocking.
-4. Enter the `CLAIM` unlock context with canonical `ClaimData`.
-5. In the callback, burn the same amount of the hook's output ERC-6909 claim.
-6. Call `poolManager.take(token, recipient, amount)`.
-7. Emit `TokensClaimed`.
+3. Convert to `uint128` only after the signed-range check and place that value in canonical `ClaimData`.
+4. Decrement the claimable balance before unlocking.
+5. Enter the `CLAIM` unlock context with canonical `ClaimData`.
+6. In the callback, burn the same signed-range amount of the hook's output ERC-6909 claim.
+7. Call `poolManager.take(token, recipient, amount)`.
+8. Emit `TokensClaimed`.
 
-The entrypoint is non-reentrant. A callback failure reverts the prior balance decrement. Claims may be partial, but each unit can be claimed only once.
+The entrypoint is non-reentrant. A callback failure reverts the prior balance decrement. An account-level `uint256` balance may exceed the per-operation signed limit after accumulating claims across batches; the user redeems it through repeated partial calls, each no larger than `type(int128).max`. A request above that limit reverts before any cast or balance mutation. Each unit can be claimed only once.
 
 ## 10. Timeout and refunds
 
@@ -539,30 +561,31 @@ The following properties must hold in tests and production:
 1. **Router identity:** only `AuraRouter` can create Aura orders, and the router cannot forge `owner`.
 2. **Pool binding:** all order, claim, and settlement accounting belongs to the immutable Aura pool.
 3. **Parking curve neutrality:** parking never changes pool price, tick, active liquidity, or other AMM curve state. PoolManager's underlying token custody increases when the router settles the parked input delta.
-4. **Parking custody backing:** for each parked ERC-20 input, the increase in PoolManager custody equals the input backing added for the hook's newly minted ERC-6909 claim; tests assert the custody and claim deltas rather than requiring unchanged reserves.
-5. **Backing:** claimable liabilities plus protocol dust never exceed hook ERC-6909 holdings per pool and currency.
-6. **Conservation:** settlement closes the PoolManager unlock with zero unresolved currency deltas.
-7. **Uniformity:** every executed order uses the same directed rational price and deterministic rounding rule.
-8. **Minimum output:** no order settles below its `minAmountOut`.
-9. **One execution:** an order leaves `PARKED` exactly once, by settlement or cancellation.
-10. **Replay resistance:** a batch and solution hash settle at most once.
-11. **Bounded work:** settlement cannot iterate more than `MAX_BATCH_ORDERS`.
-11. **Callback authentication:** both callback proxy and injected RVM identity must match immutable configuration.
-12. **Unlock authentication:** only PoolManager can invoke `unlockCallback`, and only an active action context is accepted.
-13. **Claim CEI:** liability is reduced before the external unlock and claim entry is non-reentrant.
-14. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable.
-15. **No arbitrary interaction:** a solver cannot select arbitrary targets, calldata, pools, currencies, or recipients.
-16. **External-service independence:** Circle, Arc, Chainalysis, indexers, and frontend services can fail without blocking on-chain settlement validation, claims, or timeout refunds.
+4. **Parking custody backing:** for each parked ERC-20 input, the increase in PoolManager custody equals the input backing added for the hook's newly minted ERC-6909 claim.
+5. **Admission bounds:** zero minimum output is rejected, and per-direction input aggregates plus per-currency aggregate minimum-output liabilities never exceed `type(int128).max`.
+6. **Backing:** claimable liabilities plus protocol dust never exceed hook ERC-6909 holdings per pool and currency.
+7. **Conservation:** settlement closes the PoolManager unlock with zero unresolved currency deltas.
+8. **Uniformity:** every executed order uses the same directed rational price and deterministic rounding rule.
+9. **Minimum output:** no order settles below its `minAmountOut`.
+10. **One execution:** an order leaves `PARKED` exactly once, by settlement or cancellation.
+11. **Replay resistance:** a batch and solution hash settle at most once.
+12. **Bounded work:** settlement cannot iterate more than `MAX_BATCH_ORDERS`.
+13. **Callback authentication:** both callback proxy and injected RVM identity must match immutable configuration.
+14. **Unlock authentication:** only PoolManager can invoke `unlockCallback`, and only an active action context is accepted.
+15. **Claim CEI and range:** liability is reduced before the external unlock, the claim entry is non-reentrant, and each claim operation is at most `type(int128).max`; larger balances remain redeemable in partial calls.
+16. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable.
+17. **No arbitrary interaction:** a builder or dispatcher cannot select arbitrary targets, calldata, pools, currencies, or recipients.
+18. **External-service independence:** the solution builder, inbox, RPC, Reactive transport, Circle, Arc, Chainalysis, indexers, and frontend services can fail without blocking on-chain validation, claims, or timeout refunds.
 
 ## 13. Required verification
 
 At minimum, the implementation must provide:
 
 - Unit tests for every validation branch and state transition.
-- Fuzz tests for rational price calculations, rounding, minimum output, casts, and overflow boundaries.
+- Fuzz tests for rational price calculations, rounding, zero minimum rejection, aggregate input and minimum-output liability bounds, claim chunking, casts, and overflow boundaries.
 - Invariant tests for backing, order terminal-state uniqueness, replay resistance, and zero unlock deltas.
 - A perfect CoW case with no pool swap.
-- Both residual directions with only the residual touching the pool.
+- Both residual directions with only the residual touching the pool, plus fork parity between the production builder quote and pinned v4 execution.
 - Timeout and one-time refund cases.
 - Unauthorized router, callback proxy, RVM, PoolManager callback, and replay cases.
 - Remix and Slither findings recorded against an exact commit in `docs/remix-audit.md`.
