@@ -163,7 +163,7 @@ Requirements:
 
 - use `bigint`, never JavaScript floating point;
 - consume integer strings from fixtures;
-- sort order IDs canonically;
+- preserve the frozen stored order committed by `BatchClosed` and verify its membership hash;
 - output rational price, payouts, matched amounts, residual, and hash inputs;
 - compare results with Solidity test vectors;
 - exit nonzero on an invalid fixture marked as expected-valid or a mismatch.
