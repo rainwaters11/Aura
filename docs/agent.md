@@ -1,12 +1,12 @@
 # Aura Reactive Solver Agent Specification
 
 Status: normative MVP agent specification  
-Version: 1.0  
+Version: 1.1  
 Companion protocol: `docs/design.md`
 
 ## 1. Persona and objective
 
-The Aura solver is a deterministic, bounded batch auctioneer. Its job is to observe Aura order events on Unichain Sepolia, construct one mathematically valid uniform-price solution for a closed two-sided batch, and dispatch that proposal through the Reactive Network callback path.
+The Aura solver is a deterministic, bounded batch auctioneer split between an RPC-backed production solution builder and an authenticated Reactive transport. Its job is to observe a closed Aura batch, construct one mathematically valid uniform-price solution from authoritative finalized Unichain pool state, publish the bounded proposal, and dispatch that exact proposal through the Reactive Network callback path.
 
 The agent is not a custodian and is not trusted to decide final balances. It cannot move user funds directly. `AuraHook` independently validates order membership, price, payouts, residual direction, residual amount, deadlines, replay state, and realized PoolManager conservation.
 
@@ -20,18 +20,20 @@ Success means:
 
 ## 2. Runtime split
 
-Aura uses two cooperating solver surfaces:
+Aura uses four cooperating solver surfaces:
 
 | Surface | Responsibility | Authority |
 | --- | --- | --- |
-| `ReactiveBatchDispatcher.sol` in ReactVM | Subscribe to Aura logs, reconstruct bounded batch state, choose or encode the deterministic candidate, and emit a callback. | Can propose only. |
-| Local simulation worker | Reproduce the same algorithm against fixtures and forked state before deployment. | No production authority. Used for tests and debugging. |
+| Production `AuraSolutionBuilder` | Read finalized Aura events and complete PoolManager state through Unichain Sepolia RPC, run pinned v4 swap math, construct the canonical bounded solution, and submit it to the inbox. | Operational proposal source only. It cannot move funds or bypass hook validation. |
+| `AuraSolutionInbox.sol` on Unichain Sepolia | Accept a bounded encoded solution from the configured MVP publisher and emit `SolutionProposed`. | Authenticated/rate-limited event ingress only; no custody or settlement authority. |
+| `ReactiveBatchDispatcher.sol` in ReactVM | Subscribe to Aura batch evidence and inbox proposals, verify frozen membership plus the canonical envelope, and emit the exact callback. | Authenticated transport only. It does not read RPC state or quote the pool. |
+| Local simulation worker | Reproduce the builder algorithm against fixtures and forked state before deployment. | No production authority. Used for tests and debugging. |
 
-The local worker must not become an undisclosed privileged relayer. If a future design adds signed off-chain solutions, that is a protocol change requiring updates to `docs/design.md`.
+The production builder is a disclosed MVP component, distinct from the local simulator. Its publisher credential is an availability and spam-control boundary, not a financial authorization: `AuraHook` independently validates every field and realized delta. Compromise may waste inbox or callback gas but cannot redirect funds, weaken minimums, or prevent timeout refunds.
 
 ## 3. Authoritative event sources
 
-The dispatcher subscribes only to the configured Unichain Sepolia chain ID and immutable AuraHook address.
+The builder reads only the configured Unichain Sepolia RPC and immutable AuraHook, PoolManager, pool, and state-view addresses. The dispatcher subscribes only to the configured chain ID, immutable AuraHook address, and immutable AuraSolutionInbox address. No frontend or indexer response is authoritative.
 
 ### 3.1 Order event
 
@@ -100,7 +102,21 @@ event BatchClosed(
 );
 ```
 
-`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its close block, count, and hash describe immutable membership. The dispatcher preserves the hook's frozen stored order and verifies `keccak256(abi.encode(orderIds))` against `orderIdsHash` before dispatch.
+`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its close block, count, and hash describe immutable membership. The builder and dispatcher preserve the hook's frozen stored order and verify `keccak256(abi.encode(orderIds))` against `orderIdsHash`.
+
+### 3.5 Production solution proposal
+
+After quoting from finalized complete pool state, the builder calls the configured inbox, which emits:
+
+```solidity
+event SolutionProposed(
+    uint64 indexed batchId,
+    bytes32 indexed solutionHash,
+    bytes encodedSolution
+);
+```
+
+`encodedSolution` is exactly `abi.encode(BatchSolution)` and remains bounded by `MAX_BATCH_ORDERS`. The inbox accepts only the configured MVP publisher, rejects an empty payload and oversized order or payout arrays, and stores no user funds. The dispatcher decodes the payload, requires the event batch and hash to match the decoded solution, recomputes the canonical hash, and requires the ordered IDs to reproduce the previously observed `BatchClosed.orderIdsHash`. It never edits or recomputes the quoted solution.
 
 ## 4. Subscription rules
 
@@ -109,8 +125,8 @@ The constructor or initialization path subscribes through the Reactive service w
 Every accepted log must satisfy:
 
 - `log.chain_id == UNICHAIN_SEPOLIA_CHAIN_ID`;
-- `log._contract == auraHook`;
-- `log.topic_0` is one of the configured Aura event topics;
+- `log._contract` is either the immutable AuraHook or AuraSolutionInbox expected for the decoded topic;
+- `log.topic_0` is one of the configured Aura batch, destination-evidence, or `SolutionProposed` topics;
 - the batch ID and order ID decode without truncation;
 - the batch is not terminal;
 - the order ID has not already been ingested.
@@ -171,15 +187,16 @@ The MVP uses block-based intake and settlement windows, not wall-clock time.
 
 ## 7. Deterministic clearing algorithm
 
-All arithmetic uses unsigned integers and full-precision multiplication and division. JavaScript `number`, floating-point math, and decimal string rounding are forbidden in the simulation worker. Use `bigint`.
+All production-builder and simulation-worker arithmetic uses unsigned integers plus full-precision multiplication and division. JavaScript `number`, floating-point math, and decimal string rounding are forbidden. Use `bigint`.
 
 ### Step 1: validate the batch snapshot
 
 1. Require the expected number of unique orders.
 2. Require at least one order in each direction.
 3. Require the two currencies match the configured pool.
-4. Require nonzero input and minimum output amounts.
-5. Preserve the exact frozen stored order committed by `BatchClosed`; detect duplicates without reordering, require the ingested array length to equal `orderCount`, and require `keccak256(abi.encode(orderIds)) == orderIdsHash`.
+4. Require nonzero input and minimum output amounts, each no larger than `type(int128).max`.
+5. Recompute the per-direction input aggregates and per-output-currency aggregate minimum liabilities; require every aggregate to be at most `type(int128).max`.
+6. Preserve the exact frozen stored order committed by `BatchClosed`; detect duplicates without reordering, require the ingested array length to equal `orderCount`, and require `keccak256(abi.encode(orderIds)) == orderIdsHash`.
 
 ### Step 2: derive user price bounds
 
@@ -199,10 +216,10 @@ Compute the greatest lower bound and least upper bound by cross multiplication. 
 
 ### Step 3: derive bounded candidate prices
 
-Convert `referenceSqrtPriceX96` to a token1-per-token0 rational target without floating point:
+The production builder reads `currentSqrtPriceX96` from finalized PoolManager slot0 at its quote block and converts it to a token1-per-token0 rational target without floating point. `BatchClosed.referenceSqrtPriceX96` is drift evidence only and never substitutes for the live finalized state:
 
 $$
-P_{ref} = \frac{sqrtPriceX96^2}{2^{192}}
+P_{ref} = \frac{currentSqrtPriceX96^2}{2^{192}}
 $$
 
 Token decimal normalization must be explicit. The on-chain price convention remains raw token units, so any human decimal formatting is outside the settlement math.
@@ -265,15 +282,17 @@ The solver derives a bounded `sqrtPriceLimitX96` from the deployment configurati
 
 If the agent cannot derive a safe bound, it suppresses dispatch. It never substitutes an unbounded price limit.
 
-### Step 6a: quote residual execution and finalize the price
+### Step 6a: production builder quotes residual execution and finalizes the price
 
-The starting spot price is not an executable average price. For every bounded candidate, run the installed v4 swap math against the finalized pool state, including the configured LP fee, protocol fee, tick crossings, liquidity, exact-input residual, and proposed price limit. Use integer arithmetic identical to the pinned v4 dependency; an RPC quote or decimal estimate is insufficient.
+ReactVM cannot access authoritative RPC state, liquidity, fee configuration, tick bitmaps, or initialized tick data. It therefore performs no residual quote. After finalized `BatchClosed` evidence, the production `AuraSolutionBuilder` reads slot0, active liquidity, LP and protocol fees, the tick bitmap, and every initialized tick crossed by the candidate through the configured Unichain Sepolia RPC and pinned v4 state-view interfaces.
 
-Apply the realized-conservation equations in `docs/design.md` to the simulated output and the uniformly rounded payouts. Reject a candidate when quoted output does not fully back every payout. Search deterministically away from $P_{target}$ within the feasible interval (toward lower prices for a token0 residual and toward higher prices for a token1 residual), using bounded-rational mediants and the same tie rule, and select the closest candidate that passes conservation. Stop after the finite continued-fraction boundary search over the `uint128` domain; if none passes, do not dispatch. Re-quote immediately before callback emission and suppress dispatch if pool state changed. The hook still measures the actual `BalanceDelta` and reverts on underfunding.
+For every bounded candidate, the builder runs integer-identical pinned v4 swap math for the exact-input residual and proposed price limit. An RPC price estimate or decimal approximation is insufficient. It applies the realized-conservation equations in `docs/design.md`, rejects underfunded candidates, and searches deterministically away from $P_{target}$ within the feasible interval using the documented bounded-rational mediants and tie rule. The builder records the source block number and hash, re-reads that block immediately before inbox submission, and abandons the proposal if the finalized pool state changed.
+
+`AuraSolutionInbox` emits the exact bounded solution, and ReactVM only verifies and transports it. `AuraHook` remains authoritative: it recomputes order math, executes against current PoolManager state, measures the actual `BalanceDelta`, and atomically reverts stale or underfunded execution. If the builder cannot obtain complete state or find a funded candidate, it publishes nothing and the refund path remains available.
 
 ### Step 7: construct the solution hash
 
-The dispatcher and destination use the identical canonical type hash and preimage:
+The production builder, dispatcher, inbox fixtures, and destination use the identical canonical type hash and preimage:
 
 ```solidity
 bytes32 constant SOLUTION_TYPEHASH = keccak256(
@@ -328,7 +347,7 @@ emit Callback(
 );
 ```
 
-Before emitting, set the ReactVM batch status to `DISPATCHED` to suppress duplicate callbacks. Destination replay protection remains mandatory because ReactVM state is not the final security boundary.
+Before emitting, set the ReactVM batch status to `DISPATCHED` to suppress duplicate callbacks. The dispatcher must transport the exact inbox payload without changing price, arrays, price limit, or hash. Destination replay protection remains mandatory because ReactVM and the inbox are not final security boundaries.
 
 ## 9. Authentication model
 
@@ -343,12 +362,14 @@ An authorized callback is permission to attempt settlement, not permission to by
 
 ## 10. Failure modes and fallbacks
 
-External Circle, Arc, or Chainalysis services are not dependencies of the solver loop. The dispatcher reads Aura events and Unichain state, computes a bounded deterministic solution, and submits through the authenticated Reactive callback path. Funding, bridging, screening, and monitoring services may enrich operator workflows but cannot alter the canonical batch calculation or retry rules.
+External Circle, Arc, or Chainalysis services are not dependencies of the solver loop. The production builder reads finalized Aura evidence and complete Unichain pool state, publishes through AuraSolutionInbox, and the dispatcher transports the exact proposal through the authenticated Reactive callback path. Funding, bridging, screening, and monitoring services may enrich operator workflows but cannot alter the canonical batch calculation or retry rules.
 
 | Failure | Required behavior | User-fund outcome |
 | --- | --- | --- |
 | No opposite-side order | Do not dispatch. Wait for the block window, then allow hook timeout. | Owner refunds input. |
 | Empty feasible price interval | Mark candidate invalid and do not dispatch. | Batch expires and becomes refundable. |
+| Builder RPC or state-view failure | Publish no proposal; never substitute partial state or a spot-price estimate. | Funds stay parked and refundable after timeout. |
+| Inbox publisher outage | Publish no proposal; do not introduce a privileged direct-settlement bypass. | Funds stay parked and refundable after timeout. |
 | Gas price or callback funding spike | Delay dispatch while the solution remains valid. Do not mark settled. | Funds stay parked and refundable after timeout. |
 | Callback transaction reverts | Keep destination batch nonterminal. Record failure evidence and retry only if the same solution remains valid. | Atomic revert preserves backing. |
 | Residual output is insufficient | Destination reverts settlement. Do not lower user payouts. | Funds stay parked. |
@@ -370,7 +391,7 @@ External Circle, Arc, or Chainalysis services are not dependencies of the solver
 
 ## 12. Local solver simulation
 
-The local script is `scripts/simulate-solver.js` or a TypeScript equivalent. It must consume JSON fixtures containing only integer strings and output:
+The local script is `scripts/simulate-solver.js` or a TypeScript equivalent. It shares the production builder's pure math package but has no publisher credential or production authority. It must consume JSON fixtures containing only integer strings and output:
 
 - frozen stored-order IDs and the matching `BatchClosed.orderIdsHash`;
 - feasible price interval;
@@ -415,7 +436,10 @@ The Reactive integration is complete only when:
 
 - subscription tests accept only the configured chain, hook, and topics;
 - duplicate ingestion is idempotent;
-- the agent produces the same vector outputs as Solidity math;
+- zero minimums and aggregate minimum-output liabilities above `type(int128).max` are rejected before solution production;
+- the production builder's fork quote matches pinned v4 execution for both residual directions;
+- unauthorized inbox publication and altered inbox payloads are rejected;
+- the dispatcher produces the same canonical envelope as the builder and Solidity math without quoting pool state;
 - the callback reserves the first address for RVM injection;
 - wrong proxy and wrong RVM callbacks revert;
 - one perfect CoW batch settles with no pool swap;
