@@ -1,7 +1,7 @@
 # Aura Repository Skills and Execution Policy
 
 Status: normative tooling runbook  
-Version: 1.3  
+Version: 1.4  
 Applies to: Codex, RemixAI, Cursor, GitHub agents, and local CLI operators
 
 ## 1. Purpose
@@ -127,6 +127,8 @@ Minimum invariant set:
 - a successful unlock leaves zero unresolved deltas;
 - timeout never removes a valid claim or permits double refund;
 - a one-sided batch always reserves its final slot for the missing direction;
+- no admitted order has less than `MIN_ORDER_LIFETIME_SECONDS` remaining and no closed batch contains a deadline shorter than the finality-plus-grace horizon;
+- every prospective and frozen two-sided batch has a nonempty feasible price interval;
 - no batch emits `BatchClosed` with an individually unencodable canonical payout;
 - bounded arrays never exceed `MAX_BATCH_ORDERS`.
 
@@ -167,7 +169,8 @@ Requirements:
 - use `bigint`, never JavaScript floating point;
 - consume integer strings from fixtures;
 - preserve the frozen stored order committed by `BatchClosed` and verify its membership hash;
-- derive the sole canonical rational from the exact midpoint of frozen feasible bounds, treat `BatchClosed.referenceSqrtPriceX96` as telemetry only, reject alternate feasible prices, and output individual-encoding preflight, payouts, full-width totals, signed-range chunks, matched amounts, residual, and hash inputs;
+- reject short-horizon deadlines and any incoming order that would make the prospective two-sided feasible interval empty;
+- derive the sole canonical rational from the exact midpoint of frozen feasible bounds, treat `BatchClosed.referenceSqrtPriceX96` as telemetry only, reject alternate feasible prices, and output deadline-horizon validation, individual-encoding preflight, payouts, full-width totals, signed-range chunks, matched amounts, residual, and hash inputs;
 - compare results with Solidity test vectors;
 - exit nonzero on an invalid fixture marked as expected-valid or a mismatch.
 
@@ -262,7 +265,7 @@ Focus areas:
 - array length mismatch and duplicate order IDs;
 - price arithmetic, rounding, and overflow;
 - cross-currency and cross-user accounting;
-- trapped-fund, directional-capacity reservation, closure-payout preflight, finality-buffer, authenticated cron routing, callback retry, and timeout paths;
+- trapped-fund, directional-capacity reservation, minimum-lifetime and closure-deadline preflight, nonempty feasible-interval admission, closure-payout preflight, finality-buffer, event-kind-scoped deduplication, authenticated cron routing, callback retry, and timeout paths;
 - denial of service within the bounded batch.
 
 Save each finding as fixed, accepted, false positive, or deferred with evidence.
@@ -283,7 +286,7 @@ Confirm:
 - contract verification endpoint is reachable;
 - the exact Git commit is clean and CI is green;
 - a `solution-builder-readonly` run proves complete finalized state access, frozen-midpoint canonical-price parity, individual-payout encoding safety, and fork-quote parity without loading a publisher credential;
-- the deployed finality buffer, post-finality grace, retry delay, retry-attempt cap, and Unix-deadline comparisons equal the normative `BASELINE.md` values.
+- the deployed minimum order lifetime, finality buffer, post-finality grace, retry delay, retry-attempt cap, feasible-interval admission rule, and Unix-deadline comparisons equal the normative `BASELINE.md` values.
 
 Do not request or print secret values. Report variable names and validation status only.
 

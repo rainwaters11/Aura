@@ -1,7 +1,7 @@
 # Aura Reactive Solver Agent Specification
 
 Status: normative MVP agent specification  
-Version: 1.3  
+Version: 1.4  
 Companion protocol: `docs/design.md`
 
 ## 1. Persona and objective
@@ -135,17 +135,20 @@ Log validation branches by authenticated source before decoding event-specific f
 
 For accepted hook or inbox logs, additionally require:
 
-- the batch ID and order ID decode without truncation;
+- every indexed field decodes without truncation;
 - the batch is not terminal;
-- the order ID has not already been ingested.
+- the event has not already been ingested under its exact event identity.
 
-The state key for hook/inbox ingestion is:
+The state key for hook/inbox ingestion is scoped to the source and event kind:
 
 ```text
-keccak256(chainId, auraHook, batchId, orderId)
+eventKey = keccak256(
+    abi.encode(log.chain_id, log._contract, log.topic_0, log.topic_1, log.topic_2, log.topic_3)
+)
+payloadHash = keccak256(log.data)
 ```
 
-Duplicate delivery is ignored. Conflicting duplicate content marks the batch invalid and suppresses dispatch.
+Store `payloadHash` by `eventKey`. An exact redelivery with the same key and payload hash is ignored. Reuse of the same event key with different data marks the batch invalid and suppresses dispatch. Including the emitting contract and every topic prevents batch-level events with no `orderId`—such as `BatchClosed`, `BatchSettled`, and inbox evidence—from colliding merely because an absent order topic decodes to zero. Authenticated Reactive cron ticks use the separate retry-only branch and never enter this ingestion-deduplication map.
 
 ## 5. Bounded agent state
 
@@ -188,15 +191,15 @@ The MVP uses block-based intake and settlement windows, not wall-clock time.
 
 - A batch begins when AuraHook emits its first `OrderParked` for the batch ID.
 - `BatchReady` records that both directions exist but does not close the batch or permit dispatch.
-- While a batch is one-sided, the hook reserves its final slot for the missing direction by rejecting a same-direction order when `orderCount == MAX_BATCH_ORDERS - 1`. Reaching the four-order cap therefore requires both directions; closure records `closedAtBlock` plus `closedAtTimestamp` and emits `BatchClosed` only after the canonical individual-payout preflight passes.
-- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided batch transitions to `CLOSED`, records `closedAtBlock` and `closedAtTimestamp`, and emits `BatchClosed` only when every canonical individual payout fits `type(int128).max`; otherwise it transitions directly to `REFUNDABLE`. A one-sided batch also transitions directly to `REFUNDABLE` and is never dispatched.
+- While a batch is one-sided, the hook reserves its final slot for the missing direction by rejecting a same-direction order when `orderCount == MAX_BATCH_ORDERS - 1`. Every admitted order must also leave at least `MIN_ORDER_LIFETIME_SECONDS` before its deadline and must preserve a nonempty prospective two-sided feasible price interval. Reaching the four-order cap therefore requires both directions; closure records `closedAtBlock` plus `closedAtTimestamp` and emits `BatchClosed` only after the canonical preflight confirms a nonempty feasible interval, every order deadline covers the fixed finality-plus-grace horizon, and every individual payout is encodable.
+- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided batch transitions to `CLOSED`, records `closedAtBlock` and `closedAtTimestamp`, and emits `BatchClosed` only when the feasible interval remains nonempty, every order deadline is at least `closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`, and every canonical individual payout fits `type(int128).max`; otherwise it transitions directly to `REFUNDABLE`. A one-sided batch also transitions directly to `REFUNDABLE` and is never dispatched.
 - A two-sided batch becomes solver-eligible only after the matching `BatchClosed` event and all of the event's `orderCount` records have been ingested in frozen stored order and reproduce its `orderIdsHash`.
 - A closed two-sided batch becomes refundable only when `block.timestamp > closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. The fixed 12-hour finality buffer precedes the five-minute settlement grace, so finalized closure observation cannot consume the callback opportunity.
 - The refund entrypoint cannot transition a two-sided `READY` batch directly to `REFUNDABLE`; it must first be closed, and the finality-plus-grace boundary must elapse. This gives closure deterministic precedence over refund eligibility without trusting a builder-supplied finality acknowledgment.
 - Live demo batches contain no more than 4 orders.
 - Contract and property tests cover no more than 8 orders.
 
-`MAX_BATCH_WINDOW = 20`, `MAX_FINALITY_LAG_SECONDS = 12 hours`, `SETTLEMENT_GRACE_SECONDS = 5 minutes`, `CALLBACK_RETRY_DELAY_SECONDS = 60 seconds`, and `MAX_CALLBACK_ATTEMPTS = 3` are recorded in `BASELINE.md`; a deployment must not override them without a normative specification change. Order and solution deadlines are Unix timestamps valid through equality (`block.timestamp <= deadline`); they are never compared with block numbers.
+`MAX_BATCH_WINDOW = 20`, `MIN_ORDER_LIFETIME_SECONDS = 13 hours`, `MAX_FINALITY_LAG_SECONDS = 12 hours`, `SETTLEMENT_GRACE_SECONDS = 5 minutes`, `CALLBACK_RETRY_DELAY_SECONDS = 60 seconds`, and `MAX_CALLBACK_ATTEMPTS = 3` are recorded in `BASELINE.md`; a deployment must not override them without a normative specification change. Order and solution deadlines are Unix timestamps valid through equality (`block.timestamp <= deadline`); they are never compared with block numbers.
 
 ## 7. Deterministic clearing algorithm
 
@@ -208,8 +211,10 @@ All production-builder and simulation-worker arithmetic uses unsigned integers p
 2. Require at least one order in each direction.
 3. Require the two currencies match the configured pool.
 4. Require nonzero input and minimum output amounts, each no larger than `type(int128).max`.
-5. Recompute per-direction input aggregates and require each to be at most `type(int128).max`. Recompute per-output-currency aggregate minimum liabilities in full-width `uint256`; they may exceed the signed-operation limit but remain bounded by `MAX_BATCH_ORDERS * type(int128).max` and must be processed in deterministic chunks.
-6. Preserve the exact frozen stored order committed by `BatchClosed`; detect duplicates without reordering, require the ingested array length to equal `orderCount`, and require `keccak256(abi.encode(orderIds)) == orderIdsHash`.
+5. Require every order deadline to cover the closure's fixed finality-plus-grace horizon and reject a snapshot containing an already expired or inevitably expiring order.
+6. Recompute per-direction input aggregates and require each to be at most `type(int128).max`. Recompute per-output-currency aggregate minimum liabilities in full-width `uint256`; they may exceed the signed-operation limit but remain bounded by `MAX_BATCH_ORDERS * type(int128).max` and must be processed in deterministic chunks.
+7. Recompute the two-sided feasible interval and require it to be nonempty.
+8. Preserve the exact frozen stored order committed by `BatchClosed`; detect duplicates without reordering, require the ingested array length to equal `orderCount`, and require `keccak256(abi.encode(orderIds)) == orderIdsHash`.
 
 ### Step 2: derive user price bounds
 
@@ -225,7 +230,7 @@ $$
 P \leq \frac{amountIn_j}{minOut_j}
 $$
 
-Compute the greatest lower bound and least upper bound by cross multiplication. If the interval is empty, mark the candidate invalid and do not dispatch.
+Compute the greatest lower bound and least upper bound by cross multiplication. Admission already rejects an incoming order that would make a prospective two-sided interval empty; the builder independently recomputes that invariant from the frozen batch and refuses dispatch on any mismatch.
 
 ### Step 3: derive bounded candidate prices
 
@@ -442,8 +447,8 @@ Production secrets, signing material, private RPC URLs, and funded account detai
 The Reactive integration is complete only when:
 
 - subscription tests route only the configured Reactive chain/cron contract/topic into retry and only configured Unichain hook/inbox sources into ingestion; mixed-source logs are rejected before mutation;
-- duplicate ingestion is idempotent;
-- zero minimums and per-direction input aggregates above `type(int128).max` are rejected; a one-sided batch reserves its final slot for the missing direction; no `BatchClosed` is emitted when a canonical individual payout is unencodable, while aggregate payout liabilities above the signed limit are conserved in full width and executed through deterministic chunks;
+- event-kind-scoped ingestion is idempotent: exact redelivery is ignored, conflicting payload reuse invalidates the batch, and distinct batch-level event topics cannot collide;
+- zero minimums, deadlines shorter than `MIN_ORDER_LIFETIME_SECONDS`, prospectively empty feasible intervals, and per-direction input aggregates above `type(int128).max` are rejected before custody; a one-sided batch reserves its final slot for the missing direction; no `BatchClosed` is emitted when a canonical individual payout is unencodable, while aggregate payout liabilities above the signed limit are conserved in full width and executed through deterministic chunks;
 - the hook and builder derive the same sole canonical price from the frozen feasible-interval midpoint, ignore close-time pool spot telemetry, reject alternate feasible prices, and the builder's fork quote matches pinned v4 execution for both residual directions;
 - unauthorized inbox publication and altered inbox payloads are rejected;
 - the dispatcher produces the same canonical envelope as the builder and Solidity math without quoting pool state;

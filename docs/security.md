@@ -32,6 +32,9 @@ Target: Aura MVP on Unichain Sepolia
 17. Same-direction orders exhausting every batch slot before opposite flow can join
 18. A fourth-order submitter, permissionless closer, or temporary pool-price movement manipulating the canonical clearing reference
 19. A canonical individual payout exceeding the solution schema or PoolManager signed-operation range
+20. An order deadline too short to survive finalized closure observation plus settlement grace
+21. An incompatible incoming limit making the prospective two-sided feasible price interval empty and poisoning the batch
+22. Deduplication collisions between distinct batch-level hook or inbox event kinds
 
 ## Mandatory controls
 
@@ -41,6 +44,8 @@ Target: Aura MVP on Unichain Sepolia
 - Require the production builder to quote from finalized complete PoolManager state through pinned v4 state-view interfaces; ReactVM never substitutes a spot-price estimate for liquidity, fees, bitmap, or initialized-tick state.
 - Authenticate the AuraSolutionInbox publisher, bound the encoded solution arrays, and require the dispatcher to transport the exact recomputed canonical envelope.
 - Reserve the final slot of a one-sided batch for the missing direction by rejecting another present-direction order at `MAX_BATCH_ORDERS - 1`.
+- Before custody, require `deadline >= block.timestamp + MIN_ORDER_LIFETIME_SECONDS`, with the normative minimum fixed at 13 hours, and reject an incoming order that would make a prospective two-sided feasible interval empty.
+- Before closure, recompute the feasible interval and require every order deadline to cover `closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`; timeout failure transitions directly to `REFUNDABLE` without solver dispatch.
 - Derive exactly one canonical rational price from the exact midpoint of the frozen orders' feasible interval. Treat `BatchClosed.referenceSqrtPriceX96` as telemetry only and require the hook to reject every alternative feasible price.
 - Before emitting `BatchClosed`, require every canonical individual payout to fit `type(int128).max` and the `uint128[]` schema. Revert an invalid at-cap admission atomically and send an invalid timeout-close batch directly to `REFUNDABLE`.
 - Use full-precision rational math with explicit, tested rounding direction.
@@ -51,6 +56,7 @@ Target: Aura MVP on Unichain Sepolia
 - Limit each claim operation to `type(int128).max` while preserving repeated partial redemption of larger account-level balances.
 - Record a two-sided closure timestamp and delay refunds by the fixed 12-hour finality buffer plus five-minute settlement grace; no operator acknowledgment may extend this bound.
 - Treat `DISPATCHED` as pending and permit at most three byte-identical callback attempts, one minute apart, through the authenticated cron trigger; retries never extend the refund boundary.
+- Deduplicate AuraHook and AuraSolutionInbox logs with an event identity derived from chain, emitting contract, and all topics, storing the data payload hash separately. Ignore only exact redelivery, invalidate conflicting reuse, keep distinct event kinds distinct, and exclude retry-only cron ticks from the ingestion map.
 - Provide one-time permissionless user claims and owner-only timeout refunds.
 - Keep Circle, Arc, Chainalysis, indexers, and frontend services outside the accounting safety path.
 
@@ -63,12 +69,15 @@ Target: Aura MVP on Unichain Sepolia
 - Missing, partial, stale, or changed pool state suppresses publication or causes an atomic destination revert without weakening refunds.
 - Unauthorized inbox publication, oversized solution arrays, and altered inbox payloads fail safely.
 - Three same-direction orders reserve the final slot; a fourth same-direction order reverts, while a missing-direction order can join and close if preflight-valid.
+- A deadline equal to now or shorter than `MIN_ORDER_LIFETIME_SECONDS` rejects before custody; closure also refuses any batch whose remaining deadlines do not cover finality plus grace.
+- An incompatible incoming limit that would make the prospective two-sided feasible interval empty rejects before custody, while compatible limits preserve a nonempty interval through closure.
 - The hook rejects every funded but noncanonical price; builder and hook derive the identical tuple from the frozen feasible-interval midpoint, and close-time pool manipulation cannot change it.
 - Canonical individual payouts above `type(int128).max` never enter solver dispatch: at-cap admission reverts atomically and timeout closure becomes directly refundable. Payouts otherwise conserve value within documented rounding dust, including cases whose full-width aggregate payout exceeds the signed limit and is executed in multiple chunks.
 - Zero minimum output, individual signed-range overflow, aggregate input overflow, wrong deadline clock/boundary, duplicate order, wrong pool, wrong batch, and altered payout checks fail safely.
 - A claim request above `type(int128).max` reverts before casting or mutation; a larger accumulated balance is fully redeemable through multiple bounded partial claims.
 - A one-sided batch never emits `BatchClosed`; finality lag cannot consume the post-finality grace; refund opens exactly after the fixed finality-plus-grace boundary.
 - A configured Reactive cron log reaches the retry-only branch without passing Unichain hook/inbox checks; wrong chain, cron contract, cron topic, or mixed-source logs fail before mutation. A missing callback receipt triggers no more than three identical attempts, a delayed `BatchSettled` makes later retries harmless, and retry state cannot postpone refunds.
+- `BatchClosed`, `BatchSettled`, `OrderCancelled`, and `SolutionProposed` produce distinct event keys even when no order topic exists; exact redelivery is ignored and same-key/different-data reuse invalidates the batch.
 - Unauthorized callback proxy, RVM, cron source, and unlock callers fail.
 - Claims and refunds are CEI-safe and cannot replay.
 - Invariant: liabilities plus tracked dust never exceed ERC-6909 holdings for each pool and currency.
