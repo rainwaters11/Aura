@@ -93,13 +93,14 @@ It marks a batch complete only after observing `BatchSettled` from the configure
 ```solidity
 event BatchClosed(
     uint64 indexed batchId,
+    uint64 closedAtBlock,
     uint8 orderCount,
     bytes32 orderIdsHash,
     uint160 referenceSqrtPriceX96
 );
 ```
 
-`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its count and hash describe immutable membership. The dispatcher verifies the hash against the ingested order IDs in the hook's stored order before dispatch.
+`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its close block, count, and hash describe immutable membership. The dispatcher preserves the hook's frozen stored order and verifies `keccak256(abi.encode(orderIds))` against `orderIdsHash` before dispatch.
 
 ## 4. Subscription rules
 
@@ -143,6 +144,7 @@ struct SolverOrder {
 struct SolverBatch {
     DispatchStatus status;
     uint64 openedAtBlock;
+    uint64 closedAtBlock;
     uint8 expectedOrderCount;
     uint160 referenceSqrtPriceX96;
     bytes32[] orderIds;
@@ -153,17 +155,19 @@ The dispatcher enforces the same `MAX_BATCH_ORDERS` as the hook. It never loops 
 
 ## 6. Batch window
 
-The MVP uses a block-based window, not wall-clock time.
+The MVP uses block-based intake and settlement windows, not wall-clock time.
 
 - A batch begins when AuraHook emits its first `OrderParked` for the batch ID.
 - `BatchReady` records that both directions exist but does not close the batch or permit dispatch.
-- The batch closes deterministically when its fourth order is parked, or when anyone calls the hook's `closeBatch` after `block.number > openedAtBlock + MAX_BATCH_WINDOW` (20 blocks in the MVP).
-- It becomes eligible only after the matching `BatchClosed` event and all of the event's `orderCount` records have been ingested and reproduce its `orderIdsHash`.
+- Reaching the four-order cap freezes membership immediately, records `closedAtBlock`, and emits `BatchClosed`.
+- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided batch transitions to `CLOSED`, records `closedAtBlock`, and emits `BatchClosed`; a one-sided batch transitions directly to `REFUNDABLE` and is never dispatched.
+- A two-sided batch becomes solver-eligible only after the matching `BatchClosed` event and all of the event's `orderCount` records have been ingested in frozen stored order and reproduce its `orderIdsHash`.
+- A closed two-sided batch receives `SETTLEMENT_GRACE_BLOCKS` before refunds can win. It becomes refundable only when `block.number > max(openedAtBlock + MAX_BATCH_WINDOW, closedAtBlock + SETTLEMENT_GRACE_BLOCKS)`.
+- The refund entrypoint cannot transition a two-sided `READY` batch directly to `REFUNDABLE`; it must first be closed, and the grace boundary must elapse. This gives closure deterministic precedence over refund eligibility.
 - Live demo batches contain no more than 4 orders.
 - Contract and property tests cover no more than 8 orders.
-- A batch that never obtains both directions is not passed through to the AMM. The hook makes it refundable after `MAX_BATCH_WINDOW`.
 
-The exact MVP block count is 20 and is recorded in `BASELINE.md`; a deployment must not override it without a normative specification change.
+`MAX_BATCH_WINDOW = 20` and `SETTLEMENT_GRACE_BLOCKS = 20` are recorded in `BASELINE.md`; a deployment must not override either value without a normative specification change.
 
 ## 7. Deterministic clearing algorithm
 
@@ -175,7 +179,7 @@ All arithmetic uses unsigned integers and full-precision multiplication and divi
 2. Require at least one order in each direction.
 3. Require the two currencies match the configured pool.
 4. Require nonzero input and minimum output amounts.
-5. Sort records by `orderId` ascending to produce canonical hashing and array order.
+5. Preserve the exact frozen stored order committed by `BatchClosed`; detect duplicates without reordering, require the ingested array length to equal `orderCount`, and require `keccak256(abi.encode(orderIds)) == orderIdsHash`.
 
 ### Step 2: derive user price bounds
 
@@ -209,7 +213,7 @@ $$
 P_{target} = clamp(P_{ref}, P_{lower}, P_{upper})
 $$
 
-The exact target need not be representable by two `uint128` values. Generate a deterministic bounded rational using the continued-fraction/Stern--Brocot best approximation with `1 <= p_n,p_d <= type(uint128).max`, constrained to the closed feasible interval. Candidate comparison uses full-precision cross products; ties choose the smaller rational. Include the exact lower and upper bounds when they are representable. If no bounded rational lies in the interval, the candidate is invalid. Never reject a batch merely because the unreduced `sqrtPriceX96^2 / 2^192` components exceed `uint128`.
+The exact target need not be representable by two `uint128` values. Generate a deterministic bounded rational using the continued-fraction/Stern--Brocot best approximation with `1 <= p_n,p_d <= type(uint128).max`, constrained to the closed feasible interval. Reduce every candidate by `gcd(p_n, p_d)` before comparison, deduplication, encoding, or hashing, and require `gcd(p_n, p_d) == 1` in both the solver and destination validation. Normalize exact interval bounds the same way. Rank candidates by absolute error from `P_target` using full-precision cross products, then by smaller numeric rational, then lexicographically by smaller normalized numerator and denominator. The canonical `solutionHash` includes only this normalized tuple. If no bounded rational lies in the interval, the candidate is invalid. Never reject a batch merely because the unreduced `sqrtPriceX96^2 / 2^192` components exceed `uint128`.
 
 ### Step 4: calculate uniform payouts
 
@@ -225,7 +229,7 @@ $$
 payout_0 = \left\lfloor \frac{amountIn_1 \cdot p_d}{p_n} \right\rfloor
 $$
 
-Require each payout to meet its stored minimum. The payout array follows canonical sorted order IDs.
+Require each payout to meet its stored minimum and the installed PoolManager signed-operation limit. The payout array follows the frozen stored order committed by `BatchClosed`.
 
 ### Step 5: calculate direct match and residual
 
@@ -349,14 +353,14 @@ External Circle, Arc, or Chainalysis services are not dependencies of the solver
 - Observe `BatchSettled` before marking `SETTLED`.
 - Retry only the exact same canonical solution while its deadline and batch status permit.
 - Do not recompute a different price for the same closed batch without a new solution hash and an explicit retry policy accepted by `AuraHook`.
-- Cap retries and leave enough time for users to reach the refund boundary.
-- Never suppress or delay the permissionless timeout/refund path.
+- Cap retries before `max(openedAtBlock + MAX_BATCH_WINDOW, closedAtBlock + SETTLEMENT_GRACE_BLOCKS)`.
+- Never suppress or delay the permissionless refund path after the deterministic grace boundary.
 
 ## 12. Local solver simulation
 
 The local script is `scripts/simulate-solver.js` or a TypeScript equivalent. It must consume JSON fixtures containing only integer strings and output:
 
-- canonical sorted order IDs;
+- frozen stored-order IDs and the matching `BatchClosed.orderIdsHash`;
 - feasible price interval;
 - selected rational price;
 - payouts;
