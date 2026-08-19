@@ -9,9 +9,6 @@ on:
 permissions:
   contents: read
 
-env:
-  FOUNDRY_PROFILE: ci
-
 jobs:
   build-and-test:
     name: Forge Build & Test
