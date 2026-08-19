@@ -96,7 +96,7 @@ For `params.amountSpecified < 0`:
 2. Verify the supplied `PoolKey` hashes to the immutable Aura pool ID.
 3. Decode and validate `AuraOrderData`.
 4. Derive `amountIn = uint256(-params.amountSpecified)` with checked conversion.
-5. Verify direction, amount, nonce, owner, recipient, deadline, minimum output, batch capacity, and aggregate signed-delta bounds.
+5. Verify direction, amount, nonce, owner, recipient, deadline, batch capacity, `amountIn <= type(int128).max`, `minAmountOut <= type(int128).max`, and checked aggregate signed-delta bounds.
 6. Compute an immutable `orderId`.
 7. Call `super._beforeSwap(sender, key, params, hookData)`.
 8. `BaseAsyncSwap` takes the full specified input as an ERC-6909 claim owned by the hook and returns:
@@ -116,9 +116,11 @@ For `params.amountSpecified >= 0`, Aura does not park the order. Exact-output be
 - The first eligible order opens the next sequential batch and records `openedAtBlock`.
 - A batch becomes `READY` only when it contains at least one order in each direction and at least two total orders.
 - The hook rejects an order that would exceed `MAX_BATCH_ORDERS`.
-- Additional orders may join a ready batch only until its deterministic close condition. The demo configuration closes at 4 orders or at the configured block window.
-- Reaching 4 orders closes the batch in the parking transaction. After the block window, anyone may call `closeBatch(batchId)`; it closes a two-sided batch or makes a one-sided batch refundable. Closure freezes membership and emits `BatchClosed(batchId, orderCount, orderIdsHash, referenceSqrtPriceX96)`. The canonical hash is `keccak256(abi.encode(batchOrderIds[batchId]))` in stored order. `BatchReady` is only an early eligibility signal and never authorizes dispatch or settlement.
-- A batch with only one direction never settles in the MVP. After timeout, its orders become refundable.
+- Additional orders may join a ready batch only until its deterministic close condition.
+- Reaching 4 orders freezes membership in the parking transaction, records `closedAtBlock`, transitions the batch to `CLOSED`, and emits `BatchClosed`.
+- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch(batchId)`. A two-sided `READY` batch records `closedAtBlock`, transitions to `CLOSED`, and emits `BatchClosed`. A one-sided batch transitions directly to `REFUNDABLE` and never enters solver dispatch.
+- `BatchClosed` commits `keccak256(abi.encode(batchOrderIds[batchId]))` in frozen stored order. Duplicate detection must not reorder the array. `BatchReady` is only an early eligibility signal and never authorizes dispatch or settlement.
+- A closed two-sided batch cannot become refundable until the settlement grace boundary defined in Section 10. The refund entrypoint cannot skip `CLOSED` or race the same boundary used to close a `READY` batch.
 
 ### 4.5 Settlement entry
 
@@ -132,7 +134,7 @@ It requires:
 
 - `msg.sender == reactiveCallbackProxy`.
 - `rvmId == expectedRvmId`.
-- The batch is `READY` and has been closed, and the solution's order count and membership hash equal the frozen `BatchClosed` snapshot.
+- The batch is `CLOSED`, contains both directions, and the solution's order count, frozen stored order, and membership hash equal the `BatchClosed` snapshot.
 - The solution has not expired or been used.
 - `solutionHash` equals the canonical hash of every solution field.
 
@@ -176,6 +178,7 @@ enum BatchStatus {
     NONE,
     OPEN,
     READY,
+    CLOSED,
     SETTLING,
     SETTLED,
     FAILED,
@@ -261,6 +264,7 @@ mapping(bytes32 orderId => ParkedOrder) public orders;
 mapping(uint64 batchId => bytes32[]) internal batchOrderIds;
 mapping(uint64 batchId => BatchStatus) public batchStatus;
 mapping(uint64 batchId => uint64) public openedAtBlock;
+mapping(uint64 batchId => uint64) public closedAtBlock;
 mapping(bytes32 solutionHash => bool) public usedSolutions;
 mapping(PoolId poolId => mapping(address account => mapping(Currency token => uint256 amount)))
     public claimableBalances;
@@ -279,7 +283,7 @@ $$
 P = \frac{p_n}{p_d}
 $$
 
-where `p_n = priceNumerator`, `p_d = priceDenominator`, and both values are nonzero.
+where `p_n = priceNumerator`, `p_d = priceDenominator`, both values are nonzero, and `gcd(p_n, p_d) == 1`. Every equivalent fraction is reduced before comparison, storage, ABI encoding, fixture generation, and `solutionHash` construction. The destination rejects a non-coprime tuple. Candidate selection uses absolute error, then smaller numeric rational, then the lexicographically smaller normalized `(p_n, p_d)` tuple as deterministic tie-breaks.
 
 For a token0 input order:
 
@@ -345,7 +349,7 @@ $$
 
 If the cross products are equal, `residualAmountIn` must be zero. A nonzero residual must match the derived direction and amount exactly.
 
-Order admission maintains checked token0-input and token1-input aggregates and requires each aggregate to remain at most `type(int128).max`. Consequently every derived residual also fits PoolManager's signed `BalanceDelta` representation. This is stricter than the `uint128` storage fields by design: the installed v4 `Pool.swap` converts final swap amounts with `toInt128()`. An order that would cross either aggregate bound reverts at parking rather than creating a batch that can only time out. Aggregate payout calculations and every amount passed to `swap`, `mint`, `burn`, `take`, or delta conversion are checked against the applicable installed-v4 signed range before interaction.
+Order admission requires each `amountIn` and `minAmountOut`, plus each checked token0-input and token1-input aggregate, to remain at most `type(int128).max`. Consequently every derived residual fits PoolManager's signed `BalanceDelta` representation, and no accepted order requires an individually unmintable minimum output. This is stricter than the `uint128` storage fields by design: the installed v4 PoolManager converts relevant deltas and mint operations with signed `int128` bounds. An order that crosses an individual or aggregate bound reverts at parking rather than creating a batch that can only time out. Candidate validation also requires every payout and each per-currency aggregate amount passed to `swap`, `mint`, `burn`, `take`, or delta conversion to fit the applicable installed-v4 signed range before interaction.
 
 ### 7.4 Realized conservation
 
@@ -411,9 +415,23 @@ The entrypoint is non-reentrant. A callback failure reverts the prior balance de
 
 ## 10. Timeout and refunds
 
-`MAX_BATCH_WINDOW` is fixed to 20 blocks for the MVP, as recorded in `BASELINE.md`. The close boundary is `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW`; implementations and tests must use this strict comparison without a wall-clock substitute.
+`MAX_BATCH_WINDOW = 20` and `SETTLEMENT_GRACE_BLOCKS = 20` are fixed for the MVP and recorded in `BASELINE.md`. The intake-close boundary is `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW`; implementations and tests use this strict comparison without a wall-clock substitute.
 
-When `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW` and the batch has not settled:
+At the intake-close boundary:
+
+1. A one-sided nonterminal batch may transition directly to `REFUNDABLE`.
+2. A two-sided `READY` batch must transition to `CLOSED`, record `closedAtBlock`, freeze membership, and emit `BatchClosed`; it cannot transition directly to `REFUNDABLE`.
+
+A closed two-sided batch becomes refund-eligible only when:
+
+```text
+block.number > max(
+    openedAtBlock[batchId] + MAX_BATCH_WINDOW,
+    closedAtBlock[batchId] + SETTLEMENT_GRACE_BLOCKS
+)
+```
+
+This creates a deterministic settlement interval and makes closure win over refund at the intake boundary. After the applicable refund boundary and only while the batch remains unsettled:
 
 1. Anyone may mark the batch `REFUNDABLE`.
 2. Only an order owner may call `cancelExpiredOrder(orderId)` for that owner's `PARKED` order.
@@ -421,7 +439,7 @@ When `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW` and the batch ha
 4. The refund callback burns exactly that order's parked input claim and takes the underlying input to the owner.
 5. The hook emits `OrderCancelled`.
 
-Refund after settlement, double refund, refund to a different recipient, and refund of another user's order revert.
+Refund before the applicable boundary, refund after settlement, double refund, refund to a different recipient, and refund of another user's order revert.
 
 ## 11. Events
 
@@ -443,6 +461,14 @@ event BatchReady(
     uint64 indexed batchId,
     uint64 openedAtBlock,
     uint8 orderCount,
+    uint160 referenceSqrtPriceX96
+);
+
+event BatchClosed(
+    uint64 indexed batchId,
+    uint64 closedAtBlock,
+    uint8 orderCount,
+    bytes32 orderIdsHash,
     uint160 referenceSqrtPriceX96
 );
 
