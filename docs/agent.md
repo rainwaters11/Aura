@@ -273,24 +273,36 @@ Apply the realized-conservation equations in `docs/design.md` to the simulated o
 
 ### Step 7: construct the solution hash
 
-The canonical hash includes:
+The dispatcher and destination use the identical canonical type hash and preimage:
 
-```text
-chainId
-auraHook
-poolId
-batchId
-deadline
-priceNumerator
-priceDenominator
-residualZeroForOne
-residualAmountIn
-sqrtPriceLimitX96
-keccak256(abi.encode(orderIds))
-keccak256(abi.encode(payouts))
+```solidity
+bytes32 constant SOLUTION_TYPEHASH = keccak256(
+    "AuraBatchSolution(uint256 chainId,address auraHook,bytes32 poolId,uint64 batchId,uint64 deadline,uint128 priceNumerator,uint128 priceDenominator,bool residualZeroForOne,uint128 residualAmountIn,uint160 sqrtPriceLimitX96,bytes32 orderIdsHash,bytes32 payoutsHash)"
+);
+
+bytes32 orderIdsHash = keccak256(abi.encode(solution.orderIds));
+bytes32 payoutsHash = keccak256(abi.encode(solution.payouts));
+
+bytes32 expectedSolutionHash = keccak256(
+    abi.encode(
+        SOLUTION_TYPEHASH,                 // bytes32
+        uint256(UNICHAIN_SEPOLIA_CHAIN_ID),// uint256
+        auraHook,                          // address
+        poolId,                            // bytes32
+        solution.batchId,                  // uint64
+        solution.deadline,                 // uint64
+        solution.priceNumerator,           // uint128
+        solution.priceDenominator,         // uint128
+        solution.residualZeroForOne,       // bool
+        solution.residualAmountIn,         // uint128
+        solution.sqrtPriceLimitX96,        // uint160
+        orderIdsHash,                      // bytes32
+        payoutsHash                        // bytes32
+    )
+);
 ```
 
-The `solutionHash` field equals the hash of the other fields and domain values. It cannot hash itself.
+The literal type string, outer `abi.encode`, field order, Solidity widths, and ordered-array hashes are normative and match `docs/design.md`. The dispatcher must not use packed encoding or alternate integer widths. The `solutionHash` field equals `expectedSolutionHash` and cannot hash itself.
 
 ## 8. Callback payload
 
