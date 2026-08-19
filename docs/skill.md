@@ -1,7 +1,7 @@
 # Aura Repository Skills and Execution Policy
 
 Status: normative tooling runbook  
-Version: 1.0  
+Version: 1.1  
 Applies to: Codex, RemixAI, Cursor, GitHub agents, and local CLI operators
 
 ## 1. Purpose
@@ -55,6 +55,7 @@ Before editing, an agent must read:
 | `foundry-invariants` | `forge test --match-contract AuraInvariants -vvv` | Verify backing, conservation, replay, and terminal-state properties. | Local safe |
 | `hook-miner` | `forge script script/HookMiner.s.sol` or Aura deployment miner | Find a CREATE2 salt for required v4 hook flags. | Local safe until broadcast |
 | `batch-solver-sim` | `node scripts/simulate-solver.js` | Reproduce integer clearing math against fixtures. | Local safe |
+| `solution-builder-readonly` | `bun run solver:preflight -- --no-publish` | Read finalized complete pool state and verify a production-format residual quote without signing or publishing. | Network read-only |
 | `anvil-aura-debug` | `anvil` plus local deployment script | Reproduce complete parking, settlement, claim, and refund flows. | Local safe |
 | `remix-desktop-sync` | Open the same Foundry folder in Remix Desktop | Compile, inspect storage, audit, and debug without duplicate files. | Local safe |
 | `slither-audit` | `slither .` or RemixAI `/audit` | Static analysis against the exact commit. | Local safe |
@@ -170,7 +171,29 @@ Requirements:
 
 The command must not contact a wallet, sign, or broadcast.
 
-## 9. `anvil-aura-debug`
+## 9. `solution-builder-readonly`
+
+Run only after the production builder exists:
+
+```bash
+bun test solver
+bun run solver:preflight -- \
+  --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
+  --no-publish
+```
+
+Requirements:
+
+- verify chain ID 1301 and the immutable AuraHook, PoolManager, AuraSolutionInbox, and PoolKey addresses;
+- read a finalized block and record only its public number and hash;
+- obtain slot0, active liquidity, LP and protocol fees, tick bitmap, and every initialized tick crossed by the candidate through pinned v4 state-view interfaces;
+- run integer-identical quote math and compare it with a forked pinned-v4 execution;
+- fail closed when any state field, tick, block hash, or conservation check is missing or changes;
+- load no publisher key, send no transaction, and emit no `SolutionProposed` event.
+
+Removing `--no-publish`, loading a publisher credential, or submitting to AuraSolutionInbox is a public-network broadcast and requires explicit approval under `unichain-broadcast`.
+
+## 10. `anvil-aura-debug`
 
 Start a local node:
 
@@ -199,7 +222,7 @@ Required local sequence:
 6. Claim both outputs.
 7. Run a separate timeout/refund case.
 
-## 10. `remix-desktop-sync`
+## 11. `remix-desktop-sync`
 
 Remix Desktop opens the same repository folder. Do not copy Solidity files into a separate Remix workspace.
 
@@ -208,7 +231,7 @@ Checklist:
 1. Open Aura as a Foundry project.
 2. Confirm package-root remappings match `remappings.txt`.
 3. Select Solidity 0.8.30, Cancun, and the Foundry optimizer settings.
-4. Compile `src/AuraHook.sol`, `src/AuraRouter.sol`, and `src/ReactiveBatchDispatcher.sol`.
+4. Compile `src/AuraHook.sol`, `src/AuraRouter.sol`, `src/AuraSolutionInbox.sol`, and `src/ReactiveBatchDispatcher.sol`.
 5. Connect the Foundry Provider to local Anvil.
 6. Attach to the deployment created by Foundry scripts.
 7. Reproduce the smallest failing transaction.
@@ -218,7 +241,7 @@ Checklist:
 
 Remix success does not replace Foundry or CI success.
 
-## 11. `slither-audit`
+## 12. `slither-audit`
 
 Preferred local command:
 
@@ -242,7 +265,7 @@ Focus areas:
 
 Save each finding as fixed, accepted, false positive, or deferred with evidence.
 
-## 12. `unichain-readonly-preflight`
+## 13. `unichain-readonly-preflight`
 
 For the live Unichain Sepolia configuration, verify the Circle-issued testnet USDC address is exactly `0x31d0220469e10c4E71834a79b1f276d740d3768F` before pool initialization. Local Foundry suites continue to use mock tokens. Circle or Arc SDK setup is a separate frontend/operator task and is never required for `forge build` or contract tests. Chainalysis credentials or calls are out of scope for the MVP repository.
 
@@ -252,15 +275,16 @@ Confirm:
 
 - RPC reports chain ID 1301;
 - configured PoolManager address has code;
-- router, callback proxy, expected RVM ID, currencies, fee, tick spacing, and PoolKey are correct;
+- router, solution inbox, public solution-publisher address, callback proxy, expected RVM ID, currencies, fee, tick spacing, state-view addresses, and PoolKey are correct;
 - expected hook address has the required flag bits;
 - deployer has sufficient test ETH and no unexpected production funds;
 - contract verification endpoint is reachable;
-- the exact Git commit is clean and CI is green.
+- the exact Git commit is clean and CI is green;
+- a `solution-builder-readonly` run proves complete finalized state access and fork-quote parity without loading a publisher credential.
 
 Do not request or print secret values. Report variable names and validation status only.
 
-## 13. `unichain-broadcast`
+## 14. `unichain-broadcast`
 
 This skill pauses for explicit approval after a successful read-only preflight.
 
@@ -284,7 +308,7 @@ Safety requirements:
 - stop on address, chain, constructor, or simulation mismatch;
 - record transaction hash, block, deployed addresses, and commit SHA after success.
 
-## 14. `unichain-verify`
+## 15. `unichain-verify`
 
 Verification may run as part of an approved deployment or as a separate approved action:
 
@@ -299,7 +323,7 @@ forge verify-contract \
 
 Constructor arguments, compiler version, optimizer settings, source commit, and dependency versions must match deployment exactly.
 
-## 15. `github-draft-pr`
+## 16. `github-draft-pr`
 
 Default publication sequence:
 
@@ -325,7 +349,7 @@ PR evidence must include:
 
 Do not merge or mark ready without explicit approval.
 
-## 16. Dependency and remapping policy
+## 17. Dependency and remapping policy
 
 Use the pinned Argos-compatible graph first:
 
@@ -357,7 +381,7 @@ solmate/=lib/uniswap-hooks/lib/v4-core/lib/solmate/
 
 Do not append `/src/` when the import itself already contains `/src/`.
 
-## 17. Evidence and handoff format
+## 18. Evidence and handoff format
 
 Every agent handoff reports:
 
@@ -376,7 +400,7 @@ Next approval required:
 
 Claims such as "tested," "verified," "deployed," or "settled" require corresponding command output or on-chain evidence. A prepared command is not a completed action.
 
-## 18. Stop conditions
+## 19. Stop conditions
 
 Stop and ask Misty before continuing when:
 
