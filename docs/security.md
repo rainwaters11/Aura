@@ -38,7 +38,7 @@ Target: Aura MVP on Unichain Sepolia
 
 ## Required tests
 
-- Parking leaves price, tick, liquidity, and reserves unchanged.
+- Parking leaves price, tick, active liquidity, and curve state unchanged. Separately, PoolManager ERC-20 custody and the hook's newly minted ERC-6909 input-claim balance must each increase by exactly the parked input amount.
 - Owner spoofing and arbitrary router calls fail.
 - Perfect CoW settlement performs no pool swap.
 - Both residual directions touch the pool only for the residual amount.
