@@ -1,7 +1,7 @@
 # Aura Reactive Solver Agent Specification
 
 Status: normative MVP agent specification  
-Version: 1.2  
+Version: 1.3  
 Companion protocol: `docs/design.md`
 
 ## 1. Persona and objective
@@ -79,7 +79,7 @@ event BatchReady(
 );
 ```
 
-The hook emits this only when the batch has both directions. `referenceSqrtPriceX96` is a deterministic pool snapshot used to select a candidate inside the users' feasible interval. It is not trusted by the destination in place of payout and conservation validation.
+The hook emits this only when the batch has both directions. `referenceSqrtPriceX96` is optional pool-drift telemetry only; it never selects the canonical candidate and is not trusted by the destination in place of payout and conservation validation.
 
 ### 3.3 Destination evidence
 
@@ -103,7 +103,7 @@ event BatchClosed(
 );
 ```
 
-`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its close block, close timestamp, count, and hash describe immutable membership. The builder and dispatcher preserve the hook's frozen stored order and verify `keccak256(abi.encode(orderIds))` against `orderIdsHash`.
+`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its close block, close timestamp, count, and hash describe immutable membership. The builder and dispatcher preserve the hook's frozen stored order and verify `keccak256(abi.encode(orderIds))` against `orderIdsHash`. `referenceSqrtPriceX96` is telemetry only and never participates in canonical price selection, payout computation, or solution validation.
 
 ### 3.5 Retry clock
 
@@ -127,16 +127,19 @@ event SolutionProposed(
 
 The constructor or initialization path subscribes through the Reactive service when not running in ReactVM, following the `AbstractReactive` pattern.
 
-Every accepted log must satisfy:
+Log validation branches by authenticated source before decoding event-specific fields:
 
-- `log.chain_id == UNICHAIN_SEPOLIA_CHAIN_ID`;
-- `log._contract` is either the immutable AuraHook or AuraSolutionInbox expected for the decoded topic;
-- `log.topic_0` is one of the configured Aura batch, destination-evidence, `SolutionProposed`, or Reactive cron topics;
+1. If `log.chain_id == REACTIVE_CHAIN_ID`, require `log._contract == REACTIVE_CRON_CONTRACT` and `log.topic_0 == REACTIVE_CRON_TOPIC`. Process only the bounded retry tick from Section 11 and return immediately. The cron branch never decodes an Aura batch or order record and cannot ingest, alter, or settle a solution.
+2. Otherwise require `log.chain_id == UNICHAIN_SEPOLIA_CHAIN_ID`, then require `log._contract` to be the immutable AuraHook or AuraSolutionInbox expected for the decoded topic. Only this branch accepts Aura batch, destination-evidence, or `SolutionProposed` topics.
+3. Reject every other chain, contract, topic, or mixed-source combination before state mutation.
+
+For accepted hook or inbox logs, additionally require:
+
 - the batch ID and order ID decode without truncation;
 - the batch is not terminal;
 - the order ID has not already been ingested.
 
-The state key is:
+The state key for hook/inbox ingestion is:
 
 ```text
 keccak256(chainId, auraHook, batchId, orderId)
@@ -185,8 +188,8 @@ The MVP uses block-based intake and settlement windows, not wall-clock time.
 
 - A batch begins when AuraHook emits its first `OrderParked` for the batch ID.
 - `BatchReady` records that both directions exist but does not close the batch or permit dispatch.
-- Reaching the four-order cap freezes membership immediately only for a two-sided batch; it records `closedAtBlock` plus `closedAtTimestamp` and emits `BatchClosed`. A full one-sided batch remains open but accepts no fifth order, then becomes refundable at the intake timeout without entering dispatch.
-- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided batch transitions to `CLOSED`, records `closedAtBlock` and `closedAtTimestamp`, and emits `BatchClosed`; a one-sided batch transitions directly to `REFUNDABLE` and is never dispatched.
+- While a batch is one-sided, the hook reserves its final slot for the missing direction by rejecting a same-direction order when `orderCount == MAX_BATCH_ORDERS - 1`. Reaching the four-order cap therefore requires both directions; closure records `closedAtBlock` plus `closedAtTimestamp` and emits `BatchClosed` only after the canonical individual-payout preflight passes.
+- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided batch transitions to `CLOSED`, records `closedAtBlock` and `closedAtTimestamp`, and emits `BatchClosed` only when every canonical individual payout fits `type(int128).max`; otherwise it transitions directly to `REFUNDABLE`. A one-sided batch also transitions directly to `REFUNDABLE` and is never dispatched.
 - A two-sided batch becomes solver-eligible only after the matching `BatchClosed` event and all of the event's `orderCount` records have been ingested in frozen stored order and reproduce its `orderIdsHash`.
 - A closed two-sided batch becomes refundable only when `block.timestamp > closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. The fixed 12-hour finality buffer precedes the five-minute settlement grace, so finalized closure observation cannot consume the callback opportunity.
 - The refund entrypoint cannot transition a two-sided `READY` batch directly to `REFUNDABLE`; it must first be closed, and the finality-plus-grace boundary must elapse. This gives closure deterministic precedence over refund eligibility without trusting a builder-supplied finality acknowledgment.
@@ -226,21 +229,15 @@ Compute the greatest lower bound and least upper bound by cross multiplication. 
 
 ### Step 3: derive bounded candidate prices
 
-The one canonical target comes from the stored `BatchClosed.referenceSqrtPriceX96`, so the destination can reproduce price selection without trusting the publisher:
+The one canonical target is the exact rational midpoint of the normalized feasible bounds, derived only from frozen user orders:
 
-$
-P_{ref} = \frac{referenceSqrtPriceX96^2}{2^{192}}
-$
+$$
+P_{target} = \frac{l_n u_d + u_n l_d}{2 l_d u_d}
+$$
 
-Token decimal normalization must be explicit. The on-chain price convention remains raw token units, so any human decimal formatting is outside the settlement math.
+where `L = l_n/l_d` is the greatest lower bound and `U = u_n/u_d` is the least upper bound. Both exist for a closable two-sided batch. Compute and GCD-reduce the midpoint with checked full-precision integer arithmetic. Token decimal normalization remains outside settlement math because the price convention uses raw token units.
 
-Clamp the target to the feasible interval:
-
-$
-P_{target} = clamp(P_{ref}, P_{lower}, P_{upper})
-$
-
-The exact target need not be representable by two `uint128` values. Generate exactly one deterministic bounded rational using the continued-fraction/Stern--Brocot best approximation with `1 <= p_n,p_d <= type(uint128).max`, constrained to the closed feasible interval. Reduce every candidate by `gcd(p_n, p_d)` before comparison, encoding, or hashing, and require `gcd(p_n, p_d) == 1` in both builder and destination validation. Normalize exact interval bounds the same way. Rank by absolute error from `P_target` using full-precision cross products, then by smaller numeric rational, then lexicographically by smaller normalized numerator and denominator. `AuraHook` recomputes and requires this exact tuple; neither the builder nor publisher may search away from it for another funded price. If the canonical tuple is not fundable against finalized pool state, the builder publishes nothing and the batch eventually refunds.
+If the reduced midpoint does not fit two nonzero `uint128` values, generate exactly one deterministic continued-fraction/Stern--Brocot best bounded-rational approximation constrained to the closed feasible interval. Rank by absolute error from the exact midpoint, then smaller numeric rational, then lexicographically smaller normalized numerator and denominator. `AuraHook` and the builder recompute and require this exact tuple. `BatchClosed.referenceSqrtPriceX96` is telemetry only; the closer, fourth-order submitter, a temporary pool-price movement, builder, and publisher cannot select the clearing price. If the canonical tuple is not fundable against finalized pool state, the builder publishes nothing and the batch eventually refunds.
 
 ### Step 4: calculate uniform payouts
 
@@ -256,7 +253,7 @@ $$
 payout_0 = \left\lfloor \frac{amountIn_1 \cdot p_d}{p_n} \right\rfloor
 $$
 
-Require each individual payout to meet its stored minimum and the installed PoolManager signed-operation limit. Aggregate payout totals use full-width `uint256` and may exceed that limit; builder fixtures and destination execution split PoolManager mint/burn/take work into deterministic frozen-order chunks no larger than `type(int128).max`. The payout array follows the frozen stored order committed by `BatchClosed`.
+Require each individual payout to meet its stored minimum and fit `type(int128).max`, which also guarantees `uint128[]` encoding. The hook performs the same calculation before closure: an invalid at-cap candidate reverts the incoming parking transaction, and an invalid timeout-close candidate becomes directly `REFUNDABLE` without `BatchClosed`. Aggregate payout totals use full-width `uint256` and may exceed the signed limit; builder fixtures and destination execution split PoolManager mint/burn/take work into deterministic frozen-order chunks no larger than `type(int128).max`. The payout array follows the frozen stored order committed by `BatchClosed`.
 
 ### Step 5: calculate direct match and residual
 
@@ -296,7 +293,7 @@ If the agent cannot derive a safe bound, it suppresses dispatch. It never substi
 
 ReactVM cannot access authoritative RPC state, liquidity, fee configuration, tick bitmaps, or initialized tick data. It therefore performs no residual quote. After finalized `BatchClosed` evidence, the production `AuraSolutionBuilder` reads slot0, active liquidity, LP and protocol fees, the tick bitmap, and every initialized tick crossed by the candidate through the configured Unichain Sepolia RPC and pinned v4 state-view interfaces.
 
-For the sole destination-verifiable canonical candidate, the builder runs integer-identical pinned v4 swap math for the exact-input residual and proposed price limit. An RPC price estimate or decimal approximation is insufficient. It applies the realized-conservation equations in `docs/design.md` and rejects the proposal when that canonical price is underfunded; it never searches away from the stored closure reference for another feasible price. The builder records the source block number and hash, re-reads that block immediately before inbox submission, and abandons the proposal if the finalized pool state changed.
+For the sole destination-verifiable midpoint candidate, the builder runs integer-identical pinned v4 swap math for the exact-input residual and proposed price limit. An RPC price estimate or decimal approximation is insufficient. It applies the realized-conservation equations in `docs/design.md` and rejects the proposal when that canonical price is underfunded; it never substitutes pool spot state or searches away from the frozen-order midpoint for another feasible price. The builder records the source block number and hash, re-reads that block immediately before inbox submission, and abandons the proposal if the finalized pool state changed.
 
 `AuraSolutionInbox` emits the exact bounded solution, and ReactVM only verifies and transports it. `AuraHook` remains authoritative: it recomputes order math, executes against current PoolManager state, measures the actual `BalanceDelta`, and atomically reverts stale or underfunded execution. If the builder cannot obtain complete state or find a funded candidate, it publishes nothing and the refund path remains available.
 
@@ -444,10 +441,10 @@ Production secrets, signing material, private RPC URLs, and funded account detai
 
 The Reactive integration is complete only when:
 
-- subscription tests accept only the configured chain, hook, and topics;
+- subscription tests route only the configured Reactive chain/cron contract/topic into retry and only configured Unichain hook/inbox sources into ingestion; mixed-source logs are rejected before mutation;
 - duplicate ingestion is idempotent;
-- zero minimums and per-direction input aggregates above `type(int128).max` are rejected before solution production; aggregate payout liabilities above that limit are conserved in full width and executed through deterministic signed-range chunks;
-- the hook and builder derive the same sole canonical price from stored `BatchClosed` evidence, reject alternate feasible prices, and the builder's fork quote matches pinned v4 execution for both residual directions;
+- zero minimums and per-direction input aggregates above `type(int128).max` are rejected; a one-sided batch reserves its final slot for the missing direction; no `BatchClosed` is emitted when a canonical individual payout is unencodable, while aggregate payout liabilities above the signed limit are conserved in full width and executed through deterministic chunks;
+- the hook and builder derive the same sole canonical price from the frozen feasible-interval midpoint, ignore close-time pool spot telemetry, reject alternate feasible prices, and the builder's fork quote matches pinned v4 execution for both residual directions;
 - unauthorized inbox publication and altered inbox payloads are rejected;
 - the dispatcher produces the same canonical envelope as the builder and Solidity math without quoting pool state;
 - the callback reserves the first address for RVM injection;

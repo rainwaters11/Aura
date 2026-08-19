@@ -1,7 +1,7 @@
 # Aura Repository Skills and Execution Policy
 
 Status: normative tooling runbook  
-Version: 1.2  
+Version: 1.3  
 Applies to: Codex, RemixAI, Cursor, GitHub agents, and local CLI operators
 
 ## 1. Purpose
@@ -126,6 +126,8 @@ Minimum invariant set:
 - each solution hash executes at most once;
 - a successful unlock leaves zero unresolved deltas;
 - timeout never removes a valid claim or permits double refund;
+- a one-sided batch always reserves its final slot for the missing direction;
+- no batch emits `BatchClosed` with an individually unencodable canonical payout;
 - bounded arrays never exceed `MAX_BATCH_ORDERS`.
 
 If an invariant fails, preserve the seed and counterexample in the issue or PR evidence.
@@ -165,7 +167,7 @@ Requirements:
 - use `bigint`, never JavaScript floating point;
 - consume integer strings from fixtures;
 - preserve the frozen stored order committed by `BatchClosed` and verify its membership hash;
-- derive the sole canonical rational from frozen `BatchClosed.referenceSqrtPriceX96`, reject alternate feasible prices, and output payouts, full-width totals, signed-range chunks, matched amounts, residual, and hash inputs;
+- derive the sole canonical rational from the exact midpoint of frozen feasible bounds, treat `BatchClosed.referenceSqrtPriceX96` as telemetry only, reject alternate feasible prices, and output individual-encoding preflight, payouts, full-width totals, signed-range chunks, matched amounts, residual, and hash inputs;
 - compare results with Solidity test vectors;
 - exit nonzero on an invalid fixture marked as expected-valid or a mismatch.
 
@@ -187,7 +189,7 @@ Requirements:
 - verify chain ID 1301 and the immutable AuraHook, PoolManager, AuraSolutionInbox, and PoolKey addresses;
 - read a finalized block and record only its public number and hash;
 - obtain slot0, active liquidity, LP and protocol fees, tick bitmap, and every initialized tick crossed by the candidate through pinned v4 state-view interfaces;
-- derive the sole destination-verifiable canonical price from stored closure evidence, run integer-identical quote math for only that candidate, and compare it with a forked pinned-v4 execution;
+- derive the sole destination-verifiable canonical price from the frozen feasible-interval midpoint, confirm every individual payout passed closure encoding bounds, run integer-identical quote math for only that candidate, and compare it with a forked pinned-v4 execution;
 - fail closed when any state field, tick, block hash, or conservation check is missing or changes;
 - load no publisher key, send no transaction, and emit no `SolutionProposed` event.
 
@@ -260,7 +262,7 @@ Focus areas:
 - array length mismatch and duplicate order IDs;
 - price arithmetic, rounding, and overflow;
 - cross-currency and cross-user accounting;
-- trapped-fund, finality-buffer, callback retry, and timeout paths;
+- trapped-fund, directional-capacity reservation, closure-payout preflight, finality-buffer, authenticated cron routing, callback retry, and timeout paths;
 - denial of service within the bounded batch.
 
 Save each finding as fixed, accepted, false positive, or deferred with evidence.
@@ -280,7 +282,7 @@ Confirm:
 - deployer has sufficient test ETH and no unexpected production funds;
 - contract verification endpoint is reachable;
 - the exact Git commit is clean and CI is green;
-- a `solution-builder-readonly` run proves complete finalized state access, canonical-price parity, and fork-quote parity without loading a publisher credential;
+- a `solution-builder-readonly` run proves complete finalized state access, frozen-midpoint canonical-price parity, individual-payout encoding safety, and fork-quote parity without loading a publisher credential;
 - the deployed finality buffer, post-finality grace, retry delay, retry-attempt cap, and Unix-deadline comparisons equal the normative `BASELINE.md` values.
 
 Do not request or print secret values. Report variable names and validation status only.
