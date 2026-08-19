@@ -13,11 +13,7 @@ library ToxicFlowLib {
     /// @dev Checks that toxicExpiry[swapper] is set AND has not yet elapsed.
     /// @param toxicExpiry  Storage mapping of swapper → flag expiry timestamp.
     /// @param swapper      The address to check.
-    function isToxic(mapping(address => uint256) storage toxicExpiry, address swapper)
-        internal
-        view
-        returns (bool)
-    {
+    function isToxic(mapping(address => uint256) storage toxicExpiry, address swapper) internal view returns (bool) {
         return toxicExpiry[swapper] > block.timestamp;
     }
 
