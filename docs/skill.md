@@ -1,7 +1,7 @@
 # Aura Repository Skills and Execution Policy
 
 Status: normative tooling runbook  
-Version: 1.4  
+Version: 1.5  
 Applies to: Codex, RemixAI, Cursor, GitHub agents, and local CLI operators
 
 ## 1. Purpose
@@ -125,12 +125,12 @@ Minimum invariant set:
 - each batch settles at most once;
 - each solution hash executes at most once;
 - a successful unlock leaves zero unresolved deltas;
-- timeout never removes a valid claim or permits double refund;
+- timeout never removes a valid claim or permits double refund; a preflight-valid two-sided timeout closure enters `CLOSED`, while a one-sided or failed-preflight timeout closure enters `REFUNDABLE` without `BatchClosed`;
 - a one-sided batch always reserves its final slot for the missing direction;
 - at each successful admission, the admitted order's deadline is at least the admission timestamp plus `MIN_ORDER_LIFETIME_SECONDS`; separately, no closed batch contains a deadline shorter than its recorded closure timestamp plus the finality-and-settlement-grace horizon;
 - every prospective and frozen two-sided batch has a nonempty feasible price interval;
 - no batch emits `BatchClosed` with an individually unencodable canonical payout;
-- bounded arrays never exceed `MAX_BATCH_ORDERS`.
+- bounded arrays never exceed `MAX_BATCH_ORDERS`; pending retries never exceed `MAX_PENDING_RETRY_BATCHES`, every `DISPATCHED` batch owns one unique slot, and the bounded round-robin cursor cannot starve an occupied eligible slot.
 
 If an invariant fails, preserve the seed and counterexample in the issue or PR evidence.
 
@@ -265,7 +265,7 @@ Focus areas:
 - array length mismatch and duplicate order IDs;
 - price arithmetic, rounding, and overflow;
 - cross-currency and cross-user accounting;
-- trapped-fund, directional-capacity reservation, minimum-lifetime and closure-deadline preflight, nonempty feasible-interval admission, closure-payout preflight, finality-buffer, event-kind-scoped deduplication, authenticated cron routing, callback retry, and timeout paths;
+- trapped-fund, directional-capacity reservation, minimum-lifetime and closure-deadline preflight, nonempty feasible-interval admission, closure-payout preflight, explicit failed-preflight timeout refund, finality-buffer, event-kind-scoped deduplication, authenticated cron routing, fixed-slot retry-ring bounds, round-robin cursor fairness, callback retry, and timeout paths;
 - denial of service within the bounded batch.
 
 Save each finding as fixed, accepted, false positive, or deferred with evidence.
@@ -286,7 +286,7 @@ Confirm:
 - contract verification endpoint is reachable;
 - the exact Git commit is clean and CI is green;
 - a `solution-builder-readonly` run proves complete finalized state access, frozen-midpoint canonical-price parity, individual-payout encoding safety, and fork-quote parity without loading a publisher credential;
-- the deployed minimum order lifetime, finality buffer, post-finality grace, retry delay, retry-attempt cap, feasible-interval admission rule, and Unix-deadline comparisons equal the normative `BASELINE.md` values.
+- the deployed minimum order lifetime, finality buffer, post-finality grace, retry delay, retry-attempt cap, pending-retry capacity, timeout-preflight transition, feasible-interval admission rule, and Unix-deadline comparisons equal the normative `BASELINE.md` values.
 
 Do not request or print secret values. Report variable names and validation status only.
 

@@ -1,7 +1,7 @@
 # Aura Protocol and System Architecture
 
 Status: normative MVP specification  
-Version: 1.6  
+Version: 1.7  
 Baseline: `rainwaters11/Argos_LTS@4603269e8af7dbbff6e337546fd9d7be27deb34c`  
 Target: Unichain Sepolia, chain ID 1301  
 Compiler: Solidity 0.8.30, Cancun EVM
@@ -494,10 +494,12 @@ The entrypoint is non-reentrant. A callback failure reverts the prior balance de
 
 At the intake-close boundary:
 
-1. A one-sided nonterminal batch may transition directly to `REFUNDABLE`.
-2. A two-sided `READY` batch must transition to `CLOSED`, record both `closedAtBlock` and `closedAtTimestamp = uint64(block.timestamp)`, freeze membership, and emit `BatchClosed`; it cannot transition directly to `REFUNDABLE`.
+1. A one-sided nonterminal batch transitions directly to `REFUNDABLE` and never emits `BatchClosed`.
+2. A two-sided `READY` batch first runs the frozen feasible-interval, remaining-deadline, and canonical individual-payout encoding preflight.
+3. If that preflight succeeds, the batch transitions to `CLOSED`, records both `closedAtBlock` and `closedAtTimestamp = uint64(block.timestamp)`, freezes membership, and emits `BatchClosed`.
+4. If that preflight fails, the timeout-closing transaction transitions the batch directly to `REFUNDABLE`, records no successful closure timestamp, emits no `BatchClosed`, and makes each still-`PARKED` order owner-eligible for immediate cancellation. The invalid snapshot never enters solver dispatch.
 
-A closed two-sided batch becomes refund-eligible only when:
+A successfully closed two-sided batch becomes refund-eligible only when:
 
 ```text
 block.timestamp > closedAtTimestamp[batchId]
@@ -505,7 +507,7 @@ block.timestamp > closedAtTimestamp[batchId]
                 + SETTLEMENT_GRACE_SECONDS
 ```
 
-The 12-hour finality buffer covers the documented OP Stack maximum normal finalized-head lag; the additional five-minute grace begins after that bound and reserves time for inbox publication plus up to three one-minute callback attempts. This conservative on-chain bound is independent of an untrusted builder acknowledgment, so no operator can extend custody by withholding or delaying a finality signal. Closure wins over refund at the intake boundary, while refunds remain permissionless after the fixed bound. After the applicable refund boundary and only while the batch remains unsettled:
+The 12-hour finality buffer covers the documented OP Stack maximum normal finalized-head lag; the additional five-minute grace begins after that bound and reserves time for inbox publication plus up to three one-minute callback attempts. This conservative on-chain bound is independent of an untrusted builder acknowledgment, so no operator can extend custody by withholding or delaying a finality signal. `CLOSED` wins over refund only for a preflight-valid two-sided batch. A one-sided or failed-preflight timeout closure is already `REFUNDABLE` at the intake boundary; a successfully closed batch becomes refundable only after the fixed finality-plus-grace bound. Once the batch is `REFUNDABLE`:
 
 1. Anyone may mark the batch `REFUNDABLE`.
 2. Only an order owner may call `cancelExpiredOrder(orderId)` for that owner's `PARKED` order.
@@ -588,7 +590,7 @@ The following properties must hold in tests and production:
 13. **Callback authentication:** both callback proxy and injected RVM identity must match immutable configuration.
 14. **Unlock authentication:** only PoolManager can invoke `unlockCallback`, and only an active action context is accepted.
 15. **Claim CEI and range:** liability is reduced before the external unlock, the claim entry is non-reentrant, and each claim operation is at most `type(int128).max`; larger balances remain redeemable in partial calls.
-16. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable; a closed batch cannot become refundable until the fixed finality buffer and post-finality settlement grace have elapsed.
+16. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable. A preflight-valid `CLOSED` batch cannot become refundable until the fixed finality buffer and post-finality settlement grace have elapsed; a one-sided or failed-preflight timeout closure becomes immediately `REFUNDABLE` without `BatchClosed`.
 17. **No arbitrary interaction:** a builder or dispatcher cannot select arbitrary targets, calldata, pools, currencies, or recipients.
 18. **External-service independence:** the solution builder, inbox, RPC, Reactive transport, Circle, Arc, Chainalysis, indexers, and frontend services can fail without blocking on-chain validation, claims, or timeout refunds.
 
@@ -601,7 +603,7 @@ At minimum, the implementation must provide:
 - Invariant tests for backing, order terminal-state uniqueness, replay resistance, and zero unlock deltas.
 - A perfect CoW case with no pool swap.
 - Both residual directions with only the residual touching the pool, plus fork parity between the production builder quote and pinned v4 execution.
-- Three same-direction orders reserving the final slot, opposite-direction admission into that slot, incompatible-price admission rejection, short-deadline admission rejection, at-cap closure-preflight revert, timeout-close direct refund on an expired-horizon or unencodable snapshot, finality-buffer boundary, post-finality settlement grace, bounded callback retry, and one-time refund cases.
+- Three same-direction orders reserving the final slot, opposite-direction admission into that slot, incompatible-price admission rejection, short-deadline admission rejection, at-cap closure-preflight revert, timeout-close direct refund without `BatchClosed` on an expired-horizon or unencodable snapshot, successful-close finality-buffer boundary, post-finality settlement grace, bounded fair callback retry across concurrent pending batches, and one-time refund cases.
 - Unauthorized router, callback proxy, RVM, PoolManager callback, and replay cases.
 - Remix and Slither findings recorded against an exact commit in `docs/remix-audit.md`.
 

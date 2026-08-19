@@ -35,6 +35,8 @@ Target: Aura MVP on Unichain Sepolia
 20. An order deadline too short to survive finalized closure observation plus settlement grace
 21. An incompatible incoming limit making the prospective two-sided feasible price interval empty and poisoning the batch
 22. Deduplication collisions between distinct batch-level hook or inbox event kinds
+23. Contradictory timeout transitions sending a failed-preflight batch through solver dispatch or delaying its refund
+24. A generic cron tick selecting pending batches through an unbounded scan or starving concurrent retries
 
 ## Mandatory controls
 
@@ -45,7 +47,7 @@ Target: Aura MVP on Unichain Sepolia
 - Authenticate the AuraSolutionInbox publisher, bound the encoded solution arrays, and require the dispatcher to transport the exact recomputed canonical envelope.
 - Reserve the final slot of a one-sided batch for the missing direction by rejecting another present-direction order at `MAX_BATCH_ORDERS - 1`.
 - Before custody, require `deadline >= block.timestamp + MIN_ORDER_LIFETIME_SECONDS`, with the normative minimum fixed at 13 hours, and reject an incoming order that would make a prospective two-sided feasible interval empty.
-- Before closure, recompute the feasible interval and require every order deadline to cover `closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`; timeout failure transitions directly to `REFUNDABLE` without solver dispatch.
+- Before closure, recompute the feasible interval and require every order deadline to cover `closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. A preflight-valid two-sided timeout closure alone enters `CLOSED` and emits `BatchClosed`; a one-sided or failed-preflight timeout closure enters `REFUNDABLE` immediately, emits no `BatchClosed`, and never reaches solver dispatch.
 - Derive exactly one canonical rational price from the exact midpoint of the frozen orders' feasible interval. Treat `BatchClosed.referenceSqrtPriceX96` as telemetry only and require the hook to reject every alternative feasible price.
 - Before emitting `BatchClosed`, require every canonical individual payout to fit `type(int128).max` and the `uint128[]` schema. Revert an invalid at-cap admission atomically and send an invalid timeout-close batch directly to `REFUNDABLE`.
 - Use full-precision rational math with explicit, tested rounding direction.
@@ -55,7 +57,7 @@ Target: Aura MVP on Unichain Sepolia
 - Enforce hard batch-size bounds and one terminal transition per order.
 - Limit each claim operation to `type(int128).max` while preserving repeated partial redemption of larger account-level balances.
 - Record a two-sided closure timestamp and delay refunds by the fixed 12-hour finality buffer plus five-minute settlement grace; no operator acknowledgment may extend this bound.
-- Treat `DISPATCHED` as pending and permit at most three byte-identical callback attempts, one minute apart, through the authenticated cron trigger; retries never extend the refund boundary.
+- Treat `DISPATCHED` as pending and permit at most three byte-identical callback attempts, one minute apart, through the authenticated cron trigger. Track no more than eight pending batches in unique fixed retry slots; each cron tick scans at most eight slots, selects at most one eligible batch, advances a persistent round-robin cursor, and clears terminal slots. A full ring suppresses new dispatch without overwriting pending state, and retries never extend the refund boundary.
 - Deduplicate AuraHook and AuraSolutionInbox logs with an event identity derived from chain, emitting contract, and all topics, storing the data payload hash separately. Ignore only exact redelivery, invalidate conflicting reuse, keep distinct event kinds distinct, and exclude retry-only cron ticks from the ingestion map.
 - Provide one-time permissionless user claims and owner-only timeout refunds.
 - Keep Circle, Arc, Chainalysis, indexers, and frontend services outside the accounting safety path.
@@ -75,8 +77,8 @@ Target: Aura MVP on Unichain Sepolia
 - Canonical individual payouts above `type(int128).max` never enter solver dispatch: at-cap admission reverts atomically and timeout closure becomes directly refundable. Payouts otherwise conserve value within documented rounding dust, including cases whose full-width aggregate payout exceeds the signed limit and is executed in multiple chunks.
 - Zero minimum output, individual signed-range overflow, aggregate input overflow, wrong deadline clock/boundary, duplicate order, wrong pool, wrong batch, and altered payout checks fail safely.
 - A claim request above `type(int128).max` reverts before casting or mutation; a larger accumulated balance is fully redeemable through multiple bounded partial claims.
-- A one-sided batch never emits `BatchClosed`; finality lag cannot consume the post-finality grace; refund opens exactly after the fixed finality-plus-grace boundary.
-- A configured Reactive cron log reaches the retry-only branch without passing Unichain hook/inbox checks; wrong chain, cron contract, cron topic, or mixed-source logs fail before mutation. A missing callback receipt triggers no more than three identical attempts, a delayed `BatchSettled` makes later retries harmless, and retry state cannot postpone refunds.
+- A one-sided or failed-preflight timeout batch never emits `BatchClosed` and becomes immediately owner-refundable; a preflight-valid closed batch alone waits through finality plus grace, and finality lag cannot consume the post-finality grace.
+- A configured Reactive cron log reaches the retry-only branch without passing Unichain hook/inbox checks; wrong chain, cron contract, cron topic, or mixed-source logs fail before mutation. Concurrent `DISPATCHED` batches occupy unique slots in the fixed eight-slot retry ring; each tick performs no more than eight inspections and one callback, advances the cursor fairly, clears terminal slots, never overwrites a full ring, and triggers no more than three identical attempts per batch. A delayed `BatchSettled` makes later retries harmless, and retry state cannot postpone refunds.
 - `BatchClosed`, `BatchSettled`, `OrderCancelled`, and `SolutionProposed` produce distinct event keys even when no order topic exists; exact redelivery is ignored and same-key/different-data reuse invalidates the batch.
 - Unauthorized callback proxy, RVM, cron source, and unlock callers fail.
 - Claims and refunds are CEI-safe and cannot replay.

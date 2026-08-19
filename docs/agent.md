@@ -1,7 +1,7 @@
 # Aura Reactive Solver Agent Specification
 
 Status: normative MVP agent specification  
-Version: 1.4  
+Version: 1.5  
 Companion protocol: `docs/design.md`
 
 ## 1. Persona and objective
@@ -181,9 +181,14 @@ struct SolverBatch {
     bytes pendingEncodedSolution;
     bytes32[] orderIds;
 }
+
+uint64[MAX_PENDING_RETRY_BATCHES] pendingRetryBatchIds;
+uint8 retryCursor;
+uint8 pendingRetryCount;
+mapping(uint64 batchId => uint8 slotPlusOne) retrySlotPlusOne;
 ```
 
-The dispatcher enforces the same `MAX_BATCH_ORDERS` as the hook. It never loops over an unbounded log history.
+The dispatcher enforces the same `MAX_BATCH_ORDERS` as the hook and `MAX_PENDING_RETRY_BATCHES = 8` from `BASELINE.md`. It never loops over unbounded log history or batch IDs. Retry selection scans only the fixed eight-slot ring.
 
 ## 6. Batch window
 
@@ -195,11 +200,11 @@ The MVP uses block-based intake and settlement windows, not wall-clock time.
 - After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided batch transitions to `CLOSED`, records `closedAtBlock` and `closedAtTimestamp`, and emits `BatchClosed` only when the feasible interval remains nonempty, every order deadline is at least `closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`, and every canonical individual payout fits `type(int128).max`; otherwise it transitions directly to `REFUNDABLE`. A one-sided batch also transitions directly to `REFUNDABLE` and is never dispatched.
 - A two-sided batch becomes solver-eligible only after the matching `BatchClosed` event and all of the event's `orderCount` records have been ingested in frozen stored order and reproduce its `orderIdsHash`.
 - A closed two-sided batch becomes refundable only when `block.timestamp > closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. The fixed 12-hour finality buffer precedes the five-minute settlement grace, so finalized closure observation cannot consume the callback opportunity.
-- The refund entrypoint cannot transition a two-sided `READY` batch directly to `REFUNDABLE`; it must first be closed, and the finality-plus-grace boundary must elapse. This gives closure deterministic precedence over refund eligibility without trusting a builder-supplied finality acknowledgment.
+- A preflight-valid two-sided `READY` batch must first close and wait through finality plus grace before refund eligibility. A one-sided or failed-preflight timeout closure transitions directly to `REFUNDABLE` without `BatchClosed`; this exception is determined inside `closeBatch`, not by a separate refund entrypoint or builder acknowledgment.
 - Live demo batches contain no more than 4 orders.
 - Contract and property tests cover no more than 8 orders.
 
-`MAX_BATCH_WINDOW = 20`, `MIN_ORDER_LIFETIME_SECONDS = 13 hours`, `MAX_FINALITY_LAG_SECONDS = 12 hours`, `SETTLEMENT_GRACE_SECONDS = 5 minutes`, `CALLBACK_RETRY_DELAY_SECONDS = 60 seconds`, and `MAX_CALLBACK_ATTEMPTS = 3` are recorded in `BASELINE.md`; a deployment must not override them without a normative specification change. Order and solution deadlines are Unix timestamps valid through equality (`block.timestamp <= deadline`); they are never compared with block numbers.
+`MAX_BATCH_WINDOW = 20`, `MIN_ORDER_LIFETIME_SECONDS = 13 hours`, `MAX_FINALITY_LAG_SECONDS = 12 hours`, `SETTLEMENT_GRACE_SECONDS = 5 minutes`, `CALLBACK_RETRY_DELAY_SECONDS = 60 seconds`, `MAX_CALLBACK_ATTEMPTS = 3`, and `MAX_PENDING_RETRY_BATCHES = 8` are recorded in `BASELINE.md`; a deployment must not override them without a normative specification change. Order and solution deadlines are Unix timestamps valid through equality (`block.timestamp <= deadline`); they are never compared with block numbers.
 
 ## 7. Deterministic clearing algorithm
 
@@ -359,7 +364,7 @@ emit Callback(
 );
 ```
 
-Before the first emission, store the exact encoded solution and hash, set `callbackAttempts = 1`, record `lastDispatchTimestamp`, and set the ReactVM batch status to `DISPATCHED`. `DISPATCHED` means pending, not terminal. An authenticated cron tick may perform the bounded `DISPATCHED -> READY -> DISPATCHED` retry transition in Section 11 using the identical stored payload. The dispatcher must never change price, arrays, price limit, or hash. Destination replay protection remains mandatory because a late success followed by an evidence delay can produce a harmless duplicate attempt.
+Before the first emission, allocate exactly one vacant slot in the fixed retry ring, store the batch ID and reverse slot index, store the exact encoded solution and hash, set `callbackAttempts = 1`, record `lastDispatchTimestamp`, and set the ReactVM batch status to `DISPATCHED`. If all eight slots are occupied, keep the candidate out of `DISPATCHED`, mark its local transport state `EXPIRED`, emit no callback, and never overwrite or evict another pending batch; the on-chain batch remains governed by its permissionless refund boundary. `DISPATCHED` means pending, not terminal. An authenticated cron tick may perform the bounded, round-robin `DISPATCHED -> READY -> DISPATCHED` retry transition in Section 11 using the identical stored payload. The dispatcher must never change price, arrays, price limit, or hash. Destination replay protection remains mandatory because a late success followed by an evidence delay can produce a harmless duplicate attempt.
 
 ## 9. Authentication model
 
@@ -383,7 +388,7 @@ External Circle, Arc, or Chainalysis services are not dependencies of the solver
 | Builder RPC or state-view failure | Publish no proposal; never substitute partial state or a spot-price estimate. | Funds stay parked and refundable after timeout. |
 | Inbox publisher outage | Publish no proposal; do not introduce a privileged direct-settlement bypass. | Funds stay parked and refundable after timeout. |
 | Gas price or callback funding spike | Delay dispatch while the solution remains valid. Do not mark settled. | Funds stay parked and refundable after timeout. |
-| Callback transaction reverts or no success evidence arrives | Keep destination batch nonterminal. The next authenticated cron tick after the retry delay reopens the pending ReactVM state for the identical bounded retry. | Atomic revert preserves backing; destination replay protection makes late duplicates harmless. |
+| Callback transaction reverts or no success evidence arrives | Keep destination batch nonterminal. A later authenticated cron tick selects the batch through the bounded round-robin retry ring after its retry delay and reopens the identical pending payload. | Atomic revert preserves backing; destination replay protection makes late duplicates harmless. |
 | Residual output is insufficient | Destination reverts settlement. Do not lower user payouts. | Funds stay parked. |
 | Duplicate event | Ignore exact duplicate. | No effect. |
 | Conflicting duplicate | Mark batch invalid and suppress dispatch. | Refund path remains. |
@@ -396,10 +401,12 @@ External Circle, Arc, or Chainalysis services are not dependencies of the solver
 
 - A callback is considered pending after emission, not successful. Only an observed configured-hook `BatchSettled(batchId, solutionHash, ...)` transitions `DISPATCHED -> SETTLED`.
 - The dispatcher stores the exact canonical encoded solution, solution hash, `lastDispatchTimestamp`, and `callbackAttempts`. `CALLBACK_RETRY_DELAY_SECONDS = 60 seconds` and `MAX_CALLBACK_ATTEMPTS = 3`, including the first attempt.
-- Because Reactive transport exposes no authoritative revert receipt to this contract, an authenticated cron log is the bounded retry trigger. On a tick, a batch may transition `DISPATCHED -> READY` only when no matching `BatchSettled` has been observed, `block.timestamp >= lastDispatchTimestamp + CALLBACK_RETRY_DELAY_SECONDS`, `callbackAttempts < MAX_CALLBACK_ATTEMPTS`, `block.timestamp <= solution.deadline`, and `block.timestamp < closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. The cron log only wakes the contract; retry time is the ReactVM execution timestamp, not an untrusted event field.
-- The dispatcher then increments `callbackAttempts`, updates `lastDispatchTimestamp`, returns to `DISPATCHED`, and emits the byte-identical stored callback. It never recomputes price, payout, residual, price limit, arrays, or hash.
+- Every `DISPATCHED` batch occupies exactly one of `MAX_PENDING_RETRY_BATCHES = 8` fixed slots, and `retrySlotPlusOne[batchId]` prevents duplicate insertion. Settlement evidence, attempt exhaustion, solution expiry, or the refund boundary clears that exact slot and reverse index.
+- Because Reactive transport exposes no authoritative revert receipt, an authenticated cron log wakes the bounded selector. Starting at `retryCursor`, the selector inspects at most eight slots and chooses at most one eligible `DISPATCHED` batch. Empty, terminal, expired, capped, or not-yet-due slots are skipped without external calls. After the scan, `retryCursor` advances to the slot after the selected slot, or after the last inspected slot when none is eligible, so concurrent pending batches receive deterministic round-robin consideration and no lower batch ID can starve another.
+- A selected batch may transition `DISPATCHED -> READY` only when no matching `BatchSettled` has been observed, `block.timestamp >= lastDispatchTimestamp + CALLBACK_RETRY_DELAY_SECONDS`, `callbackAttempts < MAX_CALLBACK_ATTEMPTS`, `block.timestamp <= solution.deadline`, and `block.timestamp < closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. Retry time is the ReactVM execution timestamp, not an untrusted cron field.
+- The dispatcher increments `callbackAttempts`, updates `lastDispatchTimestamp`, returns the selected batch to `DISPATCHED`, and emits the byte-identical stored callback. It never recomputes price, payout, residual, price limit, arrays, or hash.
 - A delayed settlement-evidence log can race a retry tick; destination terminal-batch and solution-hash replay protection makes the second callback revert without changing funds.
-- After the attempt cap, solution deadline, or refund boundary, transition the local batch to `EXPIRED` and emit no more callbacks. No retry may suppress, reset, or delay the permissionless refund path.
+- After the attempt cap, solution deadline, or refund boundary, transition the local batch to `EXPIRED`, clear its retry slot, and emit no more callbacks. A full retry ring suppresses a new initial dispatch rather than overwriting pending state. No queue or retry transition may suppress, reset, or delay the permissionless refund path.
 
 ## 12. Local solver simulation
 
@@ -456,5 +463,5 @@ The Reactive integration is complete only when:
 - wrong proxy and wrong RVM callbacks revert;
 - one perfect CoW batch settles with no pool swap;
 - both residual directions settle with exactly one pool swap;
-- a callback revert leaves all inputs backed and exercises the authenticated delayed retry path no more than three total attempts;
+- a callback revert leaves all inputs backed and exercises the authenticated delayed retry path no more than three total attempts; concurrent pending batches occupy unique retry slots, each cron tick performs no more than eight inspections and one retry, the cursor advances deterministically, and no occupied slot starves;
 - a live Unichain Sepolia callback and destination settlement hash are recorded in `docs/demo-runbook.md`.
