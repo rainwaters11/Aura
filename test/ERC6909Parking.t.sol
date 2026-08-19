@@ -119,11 +119,7 @@ contract ERC6909ParkingTest is BaseTest {
         assertEq(hook.parkedClaims(address(swapRouter), currencyId), amountA);
 
         _swapExactInput(amountB);
-        assertEq(
-            hook.parkedClaims(address(swapRouter), currencyId),
-            amountA + amountB,
-            "parks should accumulate"
-        );
+        assertEq(hook.parkedClaims(address(swapRouter), currencyId), amountA + amountB, "parks should accumulate");
 
         // Full redemption
         vm.prank(address(swapRouter));

@@ -134,8 +134,7 @@ contract ToxicFlowDetectionTest is Test {
     uint256 constant UNICHAIN_CHAIN_ID = 1301;
 
     // V3 Swap event topic0
-    bytes32 constant SWAP_TOPIC =
-        keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)");
+    bytes32 constant SWAP_TOPIC = keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)");
 
     // Reactive Callback event signature
     bytes32 constant CALLBACK_SIG = keccak256("Callback(uint256,address,uint64,bytes)");

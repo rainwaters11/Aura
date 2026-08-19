@@ -42,8 +42,7 @@ contract DeployUnichain is Script {
 
     uint256 public constant UNICHAIN_SEPOLIA_CHAIN_ID = 1301;
 
-    uint160 public constant REQUIRED_FLAGS =
-        uint160(0x0080 | 0x0008); // BEFORE_SWAP_FLAG | BEFORE_SWAP_RETURNS_DELTA_FLAG
+    uint160 public constant REQUIRED_FLAGS = uint160(0x0080 | 0x0008); // BEFORE_SWAP_FLAG | BEFORE_SWAP_RETURNS_DELTA_FLAG
 
     uint160 public constant ALL_HOOK_MASK = (1 << 14) - 1;
 
@@ -98,10 +97,7 @@ contract DeployUnichain is Script {
         console2.log("ArgosLTSHook:    ", address(hookDeployed));
         console2.log("");
         console2.log("Verify on Blockscout Unichain Sepolia:");
-        console2.log(
-            "  https://unichain-sepolia.blockscout.com/address/",
-            address(hookDeployed)
-        );
+        console2.log("  https://unichain-sepolia.blockscout.com/address/", address(hookDeployed));
         console2.log("");
         console2.log("Next steps:");
         console2.log("  1. Deploy ReactiveArbitrageSensor on Reactive Network");

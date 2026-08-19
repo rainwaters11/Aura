@@ -41,8 +41,7 @@ contract ReactiveArbitrageSensor is AbstractReactive {
     /// @notice Uniswap V3 Pool Swap event topic0.
     ///         keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)")
     ///         topic1 = sender (indexed), topic2 = recipient (indexed)
-    bytes32 public constant SWAP_TOPIC =
-        keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)");
+    bytes32 public constant SWAP_TOPIC = keccak256("Swap(address,address,int256,int256,uint160,uint128,int24)");
 
     /// @notice Minimum swaps from the same sender in one L1 block to trigger detection.
     uint8 public constant SANDWICH_THRESHOLD = 2;
