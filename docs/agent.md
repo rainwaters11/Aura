@@ -88,6 +88,19 @@ The dispatcher also subscribes to:
 
 It marks a batch complete only after observing `BatchSettled` from the configured AuraHook. Emitting a callback is not settlement proof.
 
+### 3.4 Batch-closed event
+
+```solidity
+event BatchClosed(
+    uint64 indexed batchId,
+    uint8 orderCount,
+    bytes32 orderIdsHash,
+    uint160 referenceSqrtPriceX96
+);
+```
+
+`BatchClosed`, rather than `BatchReady`, is the sole solution-production trigger. Its count and hash describe immutable membership. The dispatcher verifies the hash against the ingested order IDs in the hook's stored order before dispatch.
+
 ## 4. Subscription rules
 
 The constructor or initialization path subscribes through the Reactive service when not running in ReactVM, following the `AbstractReactive` pattern.
@@ -143,12 +156,14 @@ The dispatcher enforces the same `MAX_BATCH_ORDERS` as the hook. It never loops 
 The MVP uses a block-based window, not wall-clock time.
 
 - A batch begins when AuraHook emits its first `OrderParked` for the batch ID.
-- It becomes eligible only after the matching `BatchReady` event and all announced order records have been ingested.
+- `BatchReady` records that both directions exist but does not close the batch or permit dispatch.
+- The batch closes deterministically when its fourth order is parked, or when anyone calls the hook's `closeBatch` after `block.number > openedAtBlock + MAX_BATCH_WINDOW` (20 blocks in the MVP).
+- It becomes eligible only after the matching `BatchClosed` event and all of the event's `orderCount` records have been ingested and reproduce its `orderIdsHash`.
 - Live demo batches contain no more than 4 orders.
 - Contract and property tests cover no more than 8 orders.
 - A batch that never obtains both directions is not passed through to the AMM. The hook makes it refundable after `MAX_BATCH_WINDOW`.
 
-The exact block count is a deployment parameter recorded in `BASELINE.md` and the demo runbook.
+The exact MVP block count is 20 and is recorded in `BASELINE.md`; a deployment must not override it without a normative specification change.
 
 ## 7. Deterministic clearing algorithm
 
@@ -178,9 +193,9 @@ $$
 
 Compute the greatest lower bound and least upper bound by cross multiplication. If the interval is empty, mark the candidate invalid and do not dispatch.
 
-### Step 3: derive the reference price
+### Step 3: derive bounded candidate prices
 
-Convert `referenceSqrtPriceX96` to a token1-per-token0 rational price without floating point:
+Convert `referenceSqrtPriceX96` to a token1-per-token0 rational target without floating point:
 
 $$
 P_{ref} = \frac{sqrtPriceX96^2}{2^{192}}
@@ -188,13 +203,13 @@ $$
 
 Token decimal normalization must be explicit. The on-chain price convention remains raw token units, so any human decimal formatting is outside the settlement math.
 
-Clamp the reference price to the feasible interval:
+Clamp the target to the feasible interval:
 
 $$
-P_{candidate} = clamp(P_{ref}, P_{lower}, P_{upper})
+P_{target} = clamp(P_{ref}, P_{lower}, P_{upper})
 $$
 
-Reduce the numerator and denominator by their greatest common divisor when this can be done without changing the exact rational value. Both components must fit `uint128` after normalization. Otherwise the candidate is invalid.
+The exact target need not be representable by two `uint128` values. Generate a deterministic bounded rational using the continued-fraction/Stern--Brocot best approximation with `1 <= p_n,p_d <= type(uint128).max`, constrained to the closed feasible interval. Candidate comparison uses full-precision cross products; ties choose the smaller rational. Include the exact lower and upper bounds when they are representable. If no bounded rational lies in the interval, the candidate is invalid. Never reject a batch merely because the unreduced `sqrtPriceX96^2 / 2^192` components exceed `uint128`.
 
 ### Step 4: calculate uniform payouts
 
@@ -245,6 +260,12 @@ The solver derives a bounded `sqrtPriceLimitX96` from the deployment configurati
 - be included in the canonical solution hash.
 
 If the agent cannot derive a safe bound, it suppresses dispatch. It never substitutes an unbounded price limit.
+
+### Step 6a: quote residual execution and finalize the price
+
+The starting spot price is not an executable average price. For every bounded candidate, run the installed v4 swap math against the finalized pool state, including the configured LP fee, protocol fee, tick crossings, liquidity, exact-input residual, and proposed price limit. Use integer arithmetic identical to the pinned v4 dependency; an RPC quote or decimal estimate is insufficient.
+
+Apply the realized-conservation equations in `docs/design.md` to the simulated output and the uniformly rounded payouts. Reject a candidate when quoted output does not fully back every payout. Search deterministically away from $P_{target}$ within the feasible interval (toward lower prices for a token0 residual and toward higher prices for a token1 residual), using bounded-rational mediants and the same tie rule, and select the closest candidate that passes conservation. Stop after the finite continued-fraction boundary search over the `uint128` domain; if none passes, do not dispatch. Re-quote immediately before callback emission and suppress dispatch if pool state changed. The hook still measures the actual `BalanceDelta` and reverts on underfunding.
 
 ### Step 7: construct the solution hash
 
