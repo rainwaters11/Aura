@@ -127,7 +127,7 @@ Minimum invariant set:
 - a successful unlock leaves zero unresolved deltas;
 - timeout never removes a valid claim or permits double refund;
 - a one-sided batch always reserves its final slot for the missing direction;
-- no admitted order has less than `MIN_ORDER_LIFETIME_SECONDS` remaining and no closed batch contains a deadline shorter than the finality-plus-grace horizon;
+- at each successful admission, the admitted order's deadline is at least the admission timestamp plus `MIN_ORDER_LIFETIME_SECONDS`; separately, no closed batch contains a deadline shorter than its recorded closure timestamp plus the finality-and-settlement-grace horizon;
 - every prospective and frozen two-sided batch has a nonempty feasible price interval;
 - no batch emits `BatchClosed` with an individually unencodable canonical payout;
 - bounded arrays never exceed `MAX_BATCH_ORDERS`.
