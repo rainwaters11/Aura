@@ -175,11 +175,35 @@ Responsibilities:
 - Decode versioned `AuraOrderData` from `hookData`.
 - Validate owner, recipient, deadline, nonce, amount, direction, pool binding, and minimum output.
 - Call `super._beforeSwap(...)` to perform exact-input parking and mint input ERC-6909 claims to the hook.
-- Create `orderId = keccak256(owner, nonce, poolId, amountIn, direction, minAmountOut, deadline)`.
+- Create the order ID with the exact domain-separated preimage from `docs/design.md`:
+
+```solidity
+bytes32 constant ORDER_TYPEHASH = keccak256(
+    "AuraOrder(uint256 chainId,address auraHook,bytes32 poolId,address owner,address recipient,uint64 nonce,uint64 deadline,bool zeroForOne,uint128 amountIn,uint128 minAmountOut)"
+);
+
+bytes32 orderId = keccak256(
+    abi.encode(
+        ORDER_TYPEHASH,
+        uint256(block.chainid),
+        address(this),
+        PoolId.unwrap(auraPoolId),
+        order.owner,
+        order.recipient,
+        order.nonce,
+        order.deadline,
+        order.zeroForOne,
+        order.amountIn,
+        order.minAmountOut
+    )
+);
+```
+
+  The literal type string, `abi.encode`, field order, and Solidity widths are normative; `abi.encodePacked` is invalid.
 - Store a bounded `Order` record and append its ID to the active batch.
 - Emit `OrderParked(batchId, orderId, owner, recipient, tokenIn, tokenOut, amountIn, minAmountOut)`.
 - Mark the batch `READY` and emit `BatchReady` when the demo threshold of two orders is reached.
-- Allow permissionless timeout closure after `MAX_WAIT_BLOCKS` so an unmatched order cannot remain open forever.
+- Allow permissionless intake closure after `MAX_BATCH_WINDOW`, preserve a deterministic `CLOSED` settlement interval for two-sided batches, and allow refunds only after the applicable `SETTLEMENT_GRACE_BLOCKS` boundary.
 - Accept only authenticated Reactive settlement callbacks.
 - Validate and execute `BatchSolution`.
 - Update pool-scoped claimable balances.
@@ -207,7 +231,16 @@ struct Order {
 Recommended settlement state:
 
 ```solidity
-enum BatchStatus { OPEN, READY, SETTLING, SETTLED, FAILED }
+enum BatchStatus {
+    NONE,
+    OPEN,
+    READY,
+    CLOSED,
+    SETTLING,
+    SETTLED,
+    FAILED,
+    REFUNDABLE
+}
 
 struct BatchSolution {
     uint64 batchId;
@@ -223,15 +256,20 @@ struct BatchSolution {
 }
 ```
 
-Use `mapping(bytes32 => Order) orders`, `mapping(uint64 => bytes32[]) batchOrderIds`, and `mapping(uint64 => BatchStatus) batchStatus`. Enforce a hard maximum order count before pushing.
+Construct `solutionHash` with the exact `SOLUTION_TYPEHASH`, typed outer `abi.encode`, and ordered-array hashes defined in `docs/design.md` and reproduced in `docs/agent.md`. The literal type string, field order, and Solidity widths are shared protocol ABI; packed encoding or a hash that includes `solutionHash` itself is invalid.
+
+Use `mapping(bytes32 => Order) orders`, `mapping(uint64 => bytes32[]) batchOrderIds`, `mapping(uint64 => BatchStatus) batchStatus`, `mapping(uint64 => uint64) openedAtBlock`, and `mapping(uint64 => uint64) closedAtBlock`. Enforce a hard maximum order count before pushing.
 
 Batch formation for the hackathon demo is intentionally deterministic:
 
 - The first order opens the next sequential batch and records `openedAtBlock`.
-- The second order marks the batch ready and emits `BatchReady`.
-- If the second order never arrives, anyone may call `closeTimedOutBatch` after `MAX_WAIT_BLOCKS`.
-- A timed-out one-sided batch is refundable, not solver-settled.
-- General time-based or variable-size auctions are deferred until after the demo.
+- The first opposite-direction order makes the batch `READY` and emits `BatchReady`; that event is telemetry and never authorizes settlement.
+- Additional orders may join only before closure and only up to the four-order demo cap.
+- Reaching the cap freezes membership immediately, records `closedAtBlock`, transitions to `CLOSED`, and emits `BatchClosed`.
+- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch`. A two-sided `READY` batch becomes `CLOSED`; a one-sided batch becomes `REFUNDABLE` and is never dispatched.
+- A closed two-sided batch becomes refundable only when `block.number > max(openedAtBlock + MAX_BATCH_WINDOW, closedAtBlock + SETTLEMENT_GRACE_BLOCKS)`.
+- The refund path cannot move a two-sided `READY` batch directly to `REFUNDABLE`; closure wins at the intake boundary and the full settlement grace must elapse.
+- General variable-size or wall-clock auctions are deferred until after the demo.
 
 ### `src/AuraRouter.sol`
 
@@ -418,8 +456,8 @@ Deliverables:
 Required tests:
 
 - Hook permission bits and mined address.
-- Exact-input parking mints the correct ERC-6909 claim.
-- Pool liquidity, slot0, and curve state remain unchanged after parking.
+- Exact-input parking mints the correct ERC-6909 claim, and PoolManager custody increases by the same parked input amount.
+- Pool price, tick, active liquidity, slot0, and curve state remain unchanged after parking.
 - Exact-output does not enter Aura parking.
 - Non-Aura router is rejected.
 - Spoofed owner or recipient is rejected.
@@ -530,7 +568,7 @@ Use this at the top of every implementation prompt:
 
 ### Prompt 2: authenticated parking
 
-> Implement `AuraRouter.sol` and `AuraHook.sol` for one PoolKey and exact-input orders only. AuraHook should inherit OpenZeppelin `BaseAsyncSwap`, require calls from AuraRouter, validate versioned hook data, call `super._beforeSwap` for ERC-6909 parking, record a bounded order by orderId, and emit `OrderParked`. Never treat the generic v4 hook sender as the wallet. Add `AuraParking.t.sol` and security tests proving the pool curve is untouched and owner spoofing is impossible.
+> Implement `AuraRouter.sol` and `AuraHook.sol` for one PoolKey and exact-input orders only. AuraHook should inherit OpenZeppelin `BaseAsyncSwap`, require calls from AuraRouter, validate versioned hook data, call `super._beforeSwap` for ERC-6909 parking, record a bounded order by the exact domain-separated orderId in `docs/design.md`, and emit `OrderParked`. Never treat the generic v4 hook sender as the wallet. Add `AuraParking.t.sol` and security tests proving the pool curve is untouched, PoolManager custody and the ERC-6909 input claim increase by the parked amount, and owner spoofing is impossible.
 
 ### Prompt 3: bounded settlement
 
@@ -540,7 +578,7 @@ Use this at the top of every implementation prompt:
 
 > Implement pool-scoped `claimableBalances` and `claimTokens`. Apply CEI before `poolManager.unlock`, burn the hook's output ERC-6909 claim, take the underlying to the recipient, and emit a claim event. Add full, partial, repeated, cross-user, cross-currency, underfunded, and reentrancy-oriented tests.
 
-Also implement `cancelExpiredOrder` for orders in timed-out, unsettled batches. It must mark the order cancelled before unlocking, burn only that order's parked input claim, return the underlying input to its owner, and reject double cancellation or cancellation after settlement.
+Also implement `cancelExpiredOrder` only for orders whose batch is `REFUNDABLE` under the exact intake and settlement-grace boundaries in `docs/design.md`. It must mark the order cancelled before unlocking, burn only that order's parked input claim, return the underlying input to its owner, and reject premature cancellation, double cancellation, or cancellation after settlement.
 
 ### Prompt 5: Reactive dispatch
 
