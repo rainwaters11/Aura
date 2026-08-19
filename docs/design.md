@@ -1,7 +1,7 @@
 # Aura Protocol and System Architecture
 
 Status: normative MVP specification  
-Version: 1.1  
+Version: 1.2  
 Baseline: `rainwaters11/Argos_LTS@4603269e8af7dbbff6e337546fd9d7be27deb34c`  
 Target: Unichain Sepolia, chain ID 1301  
 Compiler: Solidity 0.8.30, Cancun EVM
@@ -136,7 +136,7 @@ It requires:
 - `rvmId == expectedRvmId`.
 - The batch is `CLOSED`, contains both directions, and the solution's order count, frozen stored order, and membership hash equal the `BatchClosed` snapshot.
 - The solution has not expired or been used.
-- `solutionHash` equals the canonical hash of every solution field.
+- `solutionHash` equals the canonical typed hash in Section 5, including the domain values and the hashes of the ordered ID and payout arrays.
 
 After validation, it marks the batch `SETTLING` and calls `poolManager.unlock` with an action-tagged payload. A revert rolls back all status and accounting changes atomically.
 
@@ -232,25 +232,62 @@ struct ClaimData {
 
 `ClaimData` is account- and currency-scoped because `claimableBalances` aggregates liabilities from any number of settled orders. It intentionally contains no `orderId`; the canonical claim payload is exactly `(poolId, account, recipient, currency, amount)`, and the callback validates those fields against the active claim unlock context.
 
-The order ID is:
+The order ID uses this exact type hash and ABI preimage:
 
-```text
-keccak256(abi.encode(
-  ORDER_TYPEHASH,
-  chainId,
-  auraHook,
-  poolId,
-  owner,
-  recipient,
-  nonce,
-  deadline,
-  zeroForOne,
-  amountIn,
-  minAmountOut
-))
+```solidity
+bytes32 constant ORDER_TYPEHASH = keccak256(
+    "AuraOrder(uint256 chainId,address auraHook,bytes32 poolId,address owner,address recipient,uint64 nonce,uint64 deadline,bool zeroForOne,uint128 amountIn,uint128 minAmountOut)"
+);
+
+bytes32 orderId = keccak256(
+    abi.encode(
+        ORDER_TYPEHASH,                    // bytes32
+        uint256(block.chainid),            // uint256
+        address(this),                     // address
+        PoolId.unwrap(auraPoolId),         // bytes32
+        order.owner,                       // address
+        order.recipient,                   // address
+        order.nonce,                       // uint64
+        order.deadline,                    // uint64
+        order.zeroForOne,                  // bool
+        order.amountIn,                    // uint128
+        order.minAmountOut                 // uint128
+    )
+);
 ```
 
-Domain separation prevents cross-chain, cross-hook, and cross-pool replay.
+The literal type string, field order, and Solidity widths above are normative. Implementations use `abi.encode`, never `abi.encodePacked`. Domain separation prevents cross-chain, cross-hook, and cross-pool replay.
+
+The solution hash uses this exact type hash and ABI preimage:
+
+```solidity
+bytes32 constant SOLUTION_TYPEHASH = keccak256(
+    "AuraBatchSolution(uint256 chainId,address auraHook,bytes32 poolId,uint64 batchId,uint64 deadline,uint128 priceNumerator,uint128 priceDenominator,bool residualZeroForOne,uint128 residualAmountIn,uint160 sqrtPriceLimitX96,bytes32 orderIdsHash,bytes32 payoutsHash)"
+);
+
+bytes32 orderIdsHash = keccak256(abi.encode(solution.orderIds));
+bytes32 payoutsHash = keccak256(abi.encode(solution.payouts));
+
+bytes32 expectedSolutionHash = keccak256(
+    abi.encode(
+        SOLUTION_TYPEHASH,                 // bytes32
+        uint256(block.chainid),            // uint256
+        address(this),                     // address
+        PoolId.unwrap(auraPoolId),         // bytes32
+        solution.batchId,                  // uint64
+        solution.deadline,                 // uint64
+        solution.priceNumerator,           // uint128
+        solution.priceDenominator,         // uint128
+        solution.residualZeroForOne,       // bool
+        solution.residualAmountIn,         // uint128
+        solution.sqrtPriceLimitX96,        // uint160
+        orderIdsHash,                      // bytes32
+        payoutsHash                        // bytes32
+    )
+);
+```
+
+The `solutionHash` field must equal `expectedSolutionHash` and is never included in its own preimage. Both arrays preserve frozen stored order. The literal type string, outer `abi.encode`, field order, and Solidity widths are normative; packed encoding or alternate widths are invalid.
 
 ## 6. State layout
 
