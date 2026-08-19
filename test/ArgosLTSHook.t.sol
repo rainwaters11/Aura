@@ -235,8 +235,7 @@ contract ArgosLTSHookTest is BaseTest {
         ArgosLTSHook penalizeHook = ArgosLTSHook(penalizeFlags);
         // parkingEnabled defaults to false → PENALIZE mode
 
-        PoolKey memory penalizeKey =
-            PoolKey(c0, c1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(penalizeHook));
+        PoolKey memory penalizeKey = PoolKey(c0, c1, LPFeeLibrary.DYNAMIC_FEE_FLAG, 60, IHooks(penalizeHook));
         poolManager.initialize(penalizeKey, Constants.SQRT_PRICE_1_1);
 
         int24 tl = TickMath.minUsableTick(penalizeKey.tickSpacing);
