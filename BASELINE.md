@@ -8,7 +8,8 @@
 - Import status: Aura `main` points to the approved baseline commit
 - Target: Unichain Sepolia, chain ID 1301
 - Compiler baseline: Solidity 0.8.30, Cancun EVM
-- MVP batch window: `MAX_BATCH_WINDOW = 20` Unichain blocks, measured from the first order's `openedAtBlock`; a batch closes when `block.number > openedAtBlock + 20`
+- MVP intake window: `MAX_BATCH_WINDOW = 20` Unichain blocks, measured from the first order's `openedAtBlock`; permissionless window closure begins when `block.number > openedAtBlock + 20`
+- MVP settlement grace: `SETTLEMENT_GRACE_BLOCKS = 20` Unichain blocks, measured from `closedAtBlock`; a closed two-sided batch becomes refundable only when `block.number > max(openedAtBlock + MAX_BATCH_WINDOW, closedAtBlock + SETTLEMENT_GRACE_BLOCKS)`
 
 The imported commit is preserved as the audit and rollback anchor. Aura evolves through reviewable branches and pull requests. The Argos repository and its `main` branch are not modified by Aura work.
 
