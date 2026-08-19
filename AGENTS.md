@@ -1,82 +1,54 @@
-# Argos Project Instructions
-Critical Rule: Before generating or modifying any Uniswap v4 hook logic, you MUST cross-reference the vulnerability patterns and security constraints defined in docs/V4_SECURITY_SKILL.md
-This repo builds the Argos Uniswap v4 hook on Unichain.
+# Aura Agent Instructions
 
-## Mission
+Aura is a Uniswap v4 batch-auction hook for Unichain Sepolia. Work must be bounded, reviewable, test-backed, and consistent with the protocol specification.
 
-Argos is a specialized-market Uniswap v4 hook for LST pools on Unichain. Its MVP enforces a local risk state at `beforeSwap`, supports an authorized callback path for state updates, allows swaps in the safe state, and blocks or restricts swaps in elevated-risk states.
+## Required reading
 
-The stretch goal is to park exact-input swaps with custom accounting and ERC-6909 claims, then settle them later when conditions normalize.
+Before editing, read:
 
-The current repository still contains the stock `Counter` example from the v4 template. Treat those files as scaffolding, not product logic. New product code should center on `Argos.sol`, `test/Argos.t.sol`, and matching deploy or interaction scripts.
+1. `BASELINE.md`
+2. `docs/design.md`
+3. `docs/agent.md` when solver, Reactive Network, event, or callback behavior is in scope
+4. `docs/skill.md`
+5. `docs/security.md`
+6. the current implementation and the relevant installed dependency source
 
-## Hard Rules
+Precedence is `docs/design.md`, `docs/agent.md`, `docs/skill.md`, then implementation comments. Stop and surface an ambiguity instead of guessing.
 
-- Primary hook point: `beforeSwap` only.
-- Hook permissions: enable only `BEFORE_SWAP_FLAG` and `BEFORE_SWAP_RETURNS_DELTA_FLAG`.
-- Core MVP behavior: local risk-state enforcement with an authorized risk-update callback path.
-- Stretch behavior: custom-accounting park-and-settle for exact-input swaps using ERC-6909 claims.
-- Security baseline: follow Uniswap v4 NoOp and ReturnDelta safety patterns.
-- Prioritize security and minimal viable behavior before demo polish.
-- Target environment: Foundry, Unichain, and a clear Reactive integration story.
-- Testing rule: no logic change without matching coverage in `test/Argos.t.sol`.
-- Formatting rule: run `forge fmt` before finalizing code.
+## Locked MVP
 
-## Implementation Boundaries
+- One immutable PoolKey on Unichain Sepolia
+- Exact-input, full-fill orders only
+- One authenticated `AuraRouter`
+- `AuraHook` based on OpenZeppelin `BaseAsyncSwap`
+- At most 8 orders per test batch and 4 in the live demo
+- One uniform rational clearing price and at most one residual pool swap
+- Pool-scoped ERC-6909 custody, claims, and one-time timeout refunds
+- Authenticated Reactive callback proxy and RVM identity
 
-- Do not add `afterSwap`, liquidity hooks, donate hooks, or unrelated permissions.
-- Do not introduce alternate order types or routing logic unless the spec explicitly calls for them.
-- Do not leave template naming in production code once Argos files exist.
-- Keep changes minimal and local to the hook, tests, and deployment scripts needed for Argos.
+Circle and Arc are optional funding or frontend integrations. Chainalysis is deferred monitoring. None may become a dependency of parking, settlement, claims, or refunds.
 
-## Expected File Direction
+## Change rules
 
-- Product contract: `src/Argos.sol`
-- Main tests: `test/Argos.t.sol`
-- Optional helper libraries: `src/libraries/` or `test/utils/`
-- Deployment script: adapt `script/00_DeployHook.s.sol` for Argos flags and constructor args
-- Pool setup and swap scripts: update only as needed to exercise Argos on local or Sepolia environments
+- Work only on the named issue and branch.
+- Do not weaken an invariant to make a test pass.
+- Add or update tests for every accounting, authorization, or state-transition change.
+- Keep external source use minimal, attributed, and license-compatible. Do not copy large contracts.
+- Never commit private keys, RPC credentials, Circle secrets, deployer details, or funded wallet data.
+- Do not deploy, merge, close issues, or mark a pull request ready without explicit approval.
 
-## Hook Design Constraints
+## Required verification
 
-- `beforeSwap` must be the decision point for allow, restrict, or reject behavior.
-- Safe state should prefer the NoOp path and return a zero delta.
-- Elevated-risk behavior must be explicit: revert or apply a bounded restriction.
-- Any returned delta must preserve pool accounting invariants and be backed by explicit tests.
-- The risk-update path must be explicitly authorized and testable.
-- Avoid assumptions that only work for a single pool unless the code stores state per pool by design.
+Run the narrowest relevant checks first, then:
 
-## Testing Expectations
+```bash
+forge fmt --check
+forge build --sizes
+forge test -vv
+```
 
-Minimum test coverage should include:
+Settlement changes also require invariant tests. Frontend changes require lint, type-check, and production build. Record exact commands, results, security impact, unresolved risks, and rollback notes in the pull request.
 
-- permission bits and mined hook address flags
-- happy-path swap in safe state
-- blocked or restricted swap behavior in elevated-risk state
-- authorized and unauthorized risk-update handling
-- malformed or unsupported state transitions
-- invariant-style checks around deltas, balances, and accounting
-- edge cases around threshold or restriction boundaries and repeated calls
+## Definition of done
 
-## Working Conventions For AI Tools
-
-- Read the current repo before editing because this started from the generic v4 template.
-- Prefer small, reviewable patches over broad rewrites.
-- If spec and code disagree, update the code toward the spec or call out the conflict explicitly.
-- If a behavior affects swap accounting, add or extend tests before considering the task complete.
-- Surface any ambiguity around restriction semantics, callback authority, or future ERC-6909 custody before guessing silently.
-
-## Definition Of Done
-
-A task is not complete unless all of the following are true:
-
-- the behavior is implemented in Argos-specific code
-- `test/Argos.t.sol` covers the change
-- formatting has been run with `forge fmt`
-- scripts and constructor args remain consistent with the active hook permissions
-
-### RULE: THE REMOTION SANDBOX (MISSION 6)
-- All video rendering and Remotion code MUST be generated inside a strictly isolated directory named `/demo-video`.
-- NEVER install Remotion dependencies in the root directory or the `/frontend` directory.
-- NEVER modify any files in `/src`, `/test`, `/script`, or `/frontend` while working on the Remotion video. 
-- The Remotion project is an independent visual asset, not part of the core protocol.
+A task is done only when its acceptance criteria are met, required tests pass, documentation matches behavior, no secrets are exposed, and the pull request contains verification evidence.
