@@ -270,9 +270,9 @@ This is a Reactive Network contract, not a trusted payout oracle.
 
 Responsibilities:
 
-- Subscribe to AuraHook `OrderParked` and `BatchReady` or `BatchClosed` topics on Unichain Sepolia.
-- Maintain bounded batch state inside ReactVM.
-- When a batch closes, derive the deterministic two-token clearing solution.
+- Subscribe to AuraHook `OrderParked` and `BatchClosed` topics on Unichain Sepolia. `BatchReady` may be observed for telemetry only and must never trigger solution production or dispatch.
+- Maintain bounded batch state inside ReactVM and preserve the frozen stored order committed by `BatchClosed.orderIdsHash`.
+- Only after `BatchClosed` and membership-hash verification, derive the deterministic two-token clearing solution.
 - Emit a callback whose first address argument is reserved for the RVM ID placeholder.
 - Target an authenticated callback entrypoint on AuraHook.
 - Mark a batch dispatched before emitting the callback to prevent duplicates.
@@ -544,7 +544,7 @@ Also implement `cancelExpiredOrder` for orders in timed-out, unsettled batches. 
 
 ### Prompt 5: Reactive dispatch
 
-> Implement `ReactiveBatchDispatcher.sol` using `reactive-lib` and the current Reactive demo subscription and callback interfaces as references. Subscribe to Aura order and batch-ready events, aggregate only the bounded Aura batch, compute or encode the deterministic solution, reserve the first callback argument for the injected RVM ID, and dispatch to AuraHook. AuraHook must verify both the callback proxy and expected RVM identity. Do not copy the stop-order demo's business logic or its known TODOs. Add Foundry Reactive tests for one callback, no premature callback, replay suppression, wrong proxy, and wrong RVM identity.
+> Implement `ReactiveBatchDispatcher.sol` using `reactive-lib` and the current Reactive demo subscription and callback interfaces as references. Subscribe to `OrderParked` and `BatchClosed`; `BatchReady` is telemetry only and must never trigger solution production. Aggregate only the bounded Aura batch in frozen stored order, require the ingested IDs to reproduce `BatchClosed.orderIdsHash`, then compute or encode the deterministic solution. Reserve the first callback argument for the injected RVM ID and dispatch to AuraHook. AuraHook must verify both the callback proxy and expected RVM identity. Do not copy the stop-order demo's business logic or its known TODOs. Add Foundry Reactive tests for one callback, no callback before `BatchClosed`, membership-hash mismatch, replay suppression, wrong proxy, and wrong RVM identity.
 
 ### Prompt 6: frontend
 
