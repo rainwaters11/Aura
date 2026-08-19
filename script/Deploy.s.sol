@@ -45,8 +45,7 @@ contract Deploy is Script {
     // Flag mask for hook address requirement
     // ─────────────────────────────────────────────────────────────────────────
 
-    uint160 public constant REQUIRED_FLAGS =
-        uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
+    uint160 public constant REQUIRED_FLAGS = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
 
     // Mask for the lower 14 bits (all V4 hook permission bits)
     uint160 public constant ALL_HOOK_MASK = (1 << 14) - 1;
@@ -143,10 +142,6 @@ contract Deploy is Script {
         pure
         returns (address)
     {
-        return address(
-            uint160(
-                uint256(keccak256(abi.encodePacked(bytes1(0xff), factory, salt, initcodeHash)))
-            )
-        );
+        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), factory, salt, initcodeHash)))));
     }
 }
