@@ -9,7 +9,9 @@
 - Target: Unichain Sepolia, chain ID 1301
 - Compiler baseline: Solidity 0.8.30, Cancun EVM
 - MVP intake window: `MAX_BATCH_WINDOW = 20` Unichain blocks, measured from the first order's `openedAtBlock`; permissionless window closure begins when `block.number > openedAtBlock + 20`
-- MVP settlement grace: `SETTLEMENT_GRACE_BLOCKS = 20` Unichain blocks, measured from `closedAtBlock`; a closed two-sided batch becomes refundable only when `block.number > max(openedAtBlock + MAX_BATCH_WINDOW, closedAtBlock + SETTLEMENT_GRACE_BLOCKS)`
+- MVP finality and settlement bound: record `closedAtTimestamp` for a two-sided closure; `MAX_FINALITY_LAG_SECONDS = 12 hours` covers the documented OP Stack finalized-head lag and `SETTLEMENT_GRACE_SECONDS = 5 minutes` reserves the subsequent inbox/callback window. Basis: [OP Stack transaction finality](https://docs.optimism.io/op-stack/transactions/transaction-finality) and its documented adverse-condition lag. A closed batch becomes refundable only when `block.timestamp > closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`.
+- MVP callback retry: `CALLBACK_RETRY_DELAY_SECONDS = 60 seconds` and `MAX_CALLBACK_ATTEMPTS = 3`; only the identical canonical solution may retry before its Unix deadline and the refund boundary.
+- Deadline clock: order and solution `deadline` fields are Unix timestamps; equality remains valid and expiry begins only when `block.timestamp > deadline`. Intake windows remain block-number based.
 
 The imported commit is preserved as the audit and rollback anchor. Aura evolves through reviewable branches and pull requests. The Argos repository and its `main` branch are not modified by Aura work.
 

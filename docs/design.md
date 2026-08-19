@@ -1,7 +1,7 @@
 # Aura Protocol and System Architecture
 
 Status: normative MVP specification  
-Version: 1.3  
+Version: 1.4  
 Baseline: `rainwaters11/Argos_LTS@4603269e8af7dbbff6e337546fd9d7be27deb34c`  
 Target: Unichain Sepolia, chain ID 1301  
 Compiler: Solidity 0.8.30, Cancun EVM
@@ -90,6 +90,8 @@ The router:
 
 The hook requires `sender == address(auraRouter)`. An address decoded from `hookData` is never accepted as proof of identity by itself.
 
+`AuraOrderData.deadline` and `BatchSolution.deadline` are Unix timestamps in seconds. An order or solution is valid while `block.timestamp <= deadline` and expired only when `block.timestamp > deadline`. Batch intake, close, and dispatcher retry counters use their separately specified block or timestamp clocks; implementations must never compare a Unix deadline with `block.number`.
+
 ### 4.3 `_beforeSwap` interception
 
 For `params.amountSpecified < 0`:
@@ -98,7 +100,7 @@ For `params.amountSpecified < 0`:
 2. Verify the supplied `PoolKey` hashes to the immutable Aura pool ID.
 3. Decode and validate `AuraOrderData`.
 4. Derive `amountIn = uint256(-params.amountSpecified)` with checked conversion.
-5. Verify direction, amount, nonce, owner, recipient, deadline, batch capacity, `amountIn <= type(int128).max`, `0 < minAmountOut <= type(int128).max`, checked per-direction input aggregates, and checked per-output-currency aggregate minimum liabilities. Each aggregate must remain at most `type(int128).max` after admitting the order.
+5. Verify direction, amount, nonce, owner, recipient, the Unix-timestamp deadline, batch capacity, `amountIn <= type(int128).max`, `0 < minAmountOut <= type(int128).max`, and checked per-direction input aggregates. Each input aggregate must remain at most `type(int128).max`. Accumulate per-output-currency minimum liabilities in full-width `uint256`; the hard order-count bound and individual minimum bound limit each total to `MAX_BATCH_ORDERS * type(int128).max`.
 6. Compute an immutable `orderId`.
 7. Call `super._beforeSwap(sender, key, params, hookData)`.
 8. `BaseAsyncSwap` takes the full specified input as an ERC-6909 claim owned by the hook and returns:
@@ -119,8 +121,8 @@ For `params.amountSpecified >= 0`, Aura does not park the order. Exact-output be
 - A batch becomes `READY` only when it contains at least one order in each direction and at least two total orders.
 - The hook rejects an order that would exceed `MAX_BATCH_ORDERS`.
 - Additional orders may join a ready batch only until its deterministic close condition.
-- Reaching 4 orders freezes membership in the parking transaction, records `closedAtBlock`, transitions the batch to `CLOSED`, and emits `BatchClosed`.
-- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch(batchId)`. A two-sided `READY` batch records `closedAtBlock`, transitions to `CLOSED`, and emits `BatchClosed`. A one-sided batch transitions directly to `REFUNDABLE` and never enters solver dispatch.
+- Reaching 4 orders freezes membership in the parking transaction only when the batch is two-sided; it records `closedAtBlock` and `closedAtTimestamp`, transitions to `CLOSED`, and emits `BatchClosed`. A full one-sided batch remains `OPEN`, accepts no fifth order, and transitions directly to `REFUNDABLE` at the intake timeout without emitting `BatchClosed`.
+- After `block.number > openedAtBlock + MAX_BATCH_WINDOW`, anyone may call `closeBatch(batchId)`. A two-sided `READY` batch records `closedAtBlock` and `closedAtTimestamp`, transitions to `CLOSED`, and emits `BatchClosed`. A one-sided batch transitions directly to `REFUNDABLE` and never enters solver dispatch.
 - `BatchClosed` commits `keccak256(abi.encode(batchOrderIds[batchId]))` in frozen stored order. Duplicate detection must not reorder the array. `BatchReady` is only an early eligibility signal and never authorizes dispatch or settlement.
 - A closed two-sided batch cannot become refundable until the settlement grace boundary defined in Section 10. The refund entrypoint cannot skip `CLOSED` or race the same boundary used to close a `READY` batch.
 
@@ -305,6 +307,8 @@ mapping(uint64 batchId => bytes32[]) internal batchOrderIds;
 mapping(uint64 batchId => BatchStatus) public batchStatus;
 mapping(uint64 batchId => uint64) public openedAtBlock;
 mapping(uint64 batchId => uint64) public closedAtBlock;
+mapping(uint64 batchId => uint64) public closedAtTimestamp;
+mapping(uint64 batchId => uint160) public referenceSqrtPriceX96;
 mapping(uint64 batchId => uint256) public aggregateToken0Input;
 mapping(uint64 batchId => uint256) public aggregateToken1Input;
 mapping(uint64 batchId => uint256) public aggregateMinToken0Output;
@@ -327,7 +331,9 @@ $$
 P = \frac{p_n}{p_d}
 $$
 
-where `p_n = priceNumerator`, `p_d = priceDenominator`, both values are nonzero, and `gcd(p_n, p_d) == 1`. Every equivalent fraction is reduced before comparison, storage, ABI encoding, fixture generation, and `solutionHash` construction. The destination rejects a non-coprime tuple. Candidate selection uses absolute error, then smaller numeric rational, then the lexicographically smaller normalized `(p_n, p_d)` tuple as deterministic tie-breaks.
+where `p_n = priceNumerator`, `p_d = priceDenominator`, both values are nonzero, and `gcd(p_n, p_d) == 1`. Every equivalent fraction is reduced before comparison, storage, ABI encoding, fixture generation, and `solutionHash` construction. The destination rejects a non-coprime tuple.
+
+For each closed batch there is exactly one destination-verifiable price candidate. The hook derives `P_target` from the stored `BatchClosed.referenceSqrtPriceX96`, clamps it to the feasible interval, and applies the normative continued-fraction/Stern--Brocot bounded-rational approximation. Candidate selection uses absolute error, then smaller numeric rational, then the lexicographically smaller normalized `(p_n, p_d)` tuple as deterministic tie-breaks. `AuraHook` recomputes this candidate from stored closure evidence and rejects every other feasible price; the publisher is therefore not a financial price-selection authority.
 
 For a token0 input order:
 
@@ -393,9 +399,9 @@ $$
 
 If the cross products are equal, `residualAmountIn` must be zero. A nonzero residual must match the derived direction and amount exactly.
 
-Order admission rejects zero `amountIn` or zero `minAmountOut`. Each individual value, each checked token0-input and token1-input aggregate, and each aggregate minimum-output liability by output currency must remain at most `type(int128).max` after adding the order. A token0-input order increments `aggregateMinToken1Output`; a token1-input order increments `aggregateMinToken0Output`. All additions use checked `uint256` arithmetic before the signed-range comparison. This conservative admission bound prevents a bounded batch from accumulating minimum liabilities that no installed-v4 signed operation can represent, while full liquidity feasibility remains the production solution builder's responsibility.
+Order admission rejects zero `amountIn` or zero `minAmountOut`. Each individual value and each checked token0-input and token1-input aggregate must remain at most `type(int128).max` after adding the order. A token0-input order increments `aggregateMinToken1Output`; a token1-input order increments `aggregateMinToken0Output`; those liability totals use checked `uint256` arithmetic and may exceed `type(int128).max` because the bounded settlement sequence processes them in signed-range chunks. The hard order-count bound plus the individual minimum bound provides the explicit aggregate ceiling `MAX_BATCH_ORDERS * type(int128).max`.
 
-Candidate validation also requires total computed payout liability `Q_0` and `Q_1`, every individual payout, and every amount passed to `swap`, `mint`, `burn`, `take`, or delta conversion to fit the applicable installed-v4 signed range before interaction. Consequently every derived residual fits PoolManager's signed `BalanceDelta` representation. An order that crosses an individual input, aggregate input, or aggregate minimum-output bound reverts during parking instead of creating a representationally impossible batch that can only time out.
+Candidate validation requires every individual payout and the residual swap amount to fit `type(int128).max`. Aggregate computed payout liabilities `Q_0` and `Q_1` remain full-width `uint256` conservation values and may exceed that limit. Every PoolManager `mint`, `burn`, `take`, or delta conversion is split deterministically into the minimum number of chunks, each `<= type(int128).max`, in frozen order; chunking never changes an order payout, recipient, solution hash, or aggregate conservation result. Consequently a representable feasible batch is not rejected merely because an aggregate payout crosses the signed-operation limit.
 
 ### 7.4 Realized conservation
 
@@ -431,16 +437,17 @@ If actual pool output cannot fully back all payouts, settlement reverts. If outp
 
 ### 7.5 Production residual quoting
 
-ReactVM has no authoritative RPC or complete Uniswap v4 tick-state view and therefore must not quote residual execution. The production `AuraSolutionBuilder` is the only MVP component responsible for pre-dispatch quoting. After final `BatchClosed` evidence, it:
+ReactVM has no authoritative RPC or complete Uniswap v4 tick-state view and therefore must not quote residual execution. The production `AuraSolutionBuilder` is the only MVP component responsible for pre-dispatch quoting. After finalized `BatchClosed` evidence, it:
 
-1. reads the finalized PoolManager slot0, liquidity, LP and protocol fees, tick bitmap, and every initialized tick crossed by the candidate through a configured Unichain Sepolia RPC and the pinned v4 state-view interfaces;
-2. records the source block number and block hash in operator evidence;
-3. runs integer-identical pinned v4 swap math for the exact residual and proposed `sqrtPriceLimitX96`;
-4. applies the realized-conservation equations to the simulated output;
-5. re-reads the source block before publishing and abandons the candidate if the state changed; and
-6. submits the bounded `BatchSolution` to `AuraSolutionInbox`, which emits the proposal for Reactive delivery.
+1. derives the one canonical price from the stored `BatchClosed.referenceSqrtPriceX96` and feasible interval exactly as the destination does; it never searches for or substitutes another funded price;
+2. reads finalized PoolManager slot0, liquidity, LP and protocol fees, tick bitmap, and every initialized tick crossed by that canonical candidate through a configured Unichain Sepolia RPC and the pinned v4 state-view interfaces;
+3. records the source block number and block hash in operator evidence;
+4. runs integer-identical pinned v4 swap math for the exact residual and proposed `sqrtPriceLimitX96`;
+5. applies the realized-conservation equations to the simulated output;
+6. re-reads the source block before publishing and abandons the candidate if the state changed; and
+7. submits the bounded `BatchSolution` to `AuraSolutionInbox`, which emits the proposal for Reactive delivery.
 
-The configured publisher is an operational spam-control boundary, not a settlement authority. `AuraHook` still recomputes all deterministic order math, executes against live PoolManager state, measures the actual `BalanceDelta`, and atomically reverts a stale or underfunded proposal. Builder, inbox, RPC, or Reactive failure cannot block the permissionless refund path.
+The configured publisher is an operational spam-control boundary, not a settlement or price-selection authority. `AuraHook` recomputes the sole canonical price from stored closure evidence, recomputes all order math, executes against live PoolManager state, measures the actual `BalanceDelta`, and atomically reverts a noncanonical, stale, or underfunded proposal. Builder, inbox, RPC, or Reactive failure cannot block the permissionless refund path.
 
 ## 8. Settlement accounting sequence
 
@@ -449,10 +456,10 @@ Within the settlement unlock:
 1. Revalidate batch status and the canonical solution hash.
 2. Require unique order IDs, exact batch membership, `PARKED` status, valid deadlines, and array length equality.
 3. Sum inputs and derive every payout using `AuraClearingMath`.
-4. Burn the hook's parked input ERC-6909 claims. This exposes the underlying inputs as positive hook deltas.
+4. Burn the hook's parked input ERC-6909 claims in frozen-order signed-range chunks. This exposes the underlying inputs as positive hook deltas.
 5. If residual is nonzero, call `poolManager.swap` once with exact input and the submitted price limit.
-6. Measure the returned delta and enforce realized conservation.
-7. Mint hook-owned ERC-6909 claims for user output liabilities and tracked dust.
+6. Measure the returned delta and enforce full-width realized conservation.
+7. Mint hook-owned ERC-6909 claims for user output liabilities and tracked dust in deterministic frozen-order chunks no larger than `type(int128).max`.
 8. Update each order to `SETTLED`, credit its recipient, mark the solution used, and set the batch to `SETTLED`.
 9. Return from unlock only when every currency delta is resolved.
 
@@ -475,23 +482,22 @@ The entrypoint is non-reentrant. A callback failure reverts the prior balance de
 
 ## 10. Timeout and refunds
 
-`MAX_BATCH_WINDOW = 20` and `SETTLEMENT_GRACE_BLOCKS = 20` are fixed for the MVP and recorded in `BASELINE.md`. The intake-close boundary is `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW`; implementations and tests use this strict comparison without a wall-clock substitute.
+`MAX_BATCH_WINDOW = 20` Unichain blocks, `MAX_FINALITY_LAG_SECONDS = 12 hours`, and `SETTLEMENT_GRACE_SECONDS = 5 minutes` are fixed for the MVP and recorded in `BASELINE.md`. The intake-close boundary is `block.number > openedAtBlock[batchId] + MAX_BATCH_WINDOW`; implementations and tests use this strict block comparison.
 
 At the intake-close boundary:
 
 1. A one-sided nonterminal batch may transition directly to `REFUNDABLE`.
-2. A two-sided `READY` batch must transition to `CLOSED`, record `closedAtBlock`, freeze membership, and emit `BatchClosed`; it cannot transition directly to `REFUNDABLE`.
+2. A two-sided `READY` batch must transition to `CLOSED`, record both `closedAtBlock` and `closedAtTimestamp = uint64(block.timestamp)`, freeze membership, and emit `BatchClosed`; it cannot transition directly to `REFUNDABLE`.
 
 A closed two-sided batch becomes refund-eligible only when:
 
 ```text
-block.number > max(
-    openedAtBlock[batchId] + MAX_BATCH_WINDOW,
-    closedAtBlock[batchId] + SETTLEMENT_GRACE_BLOCKS
-)
+block.timestamp > closedAtTimestamp[batchId]
+                + MAX_FINALITY_LAG_SECONDS
+                + SETTLEMENT_GRACE_SECONDS
 ```
 
-This creates a deterministic settlement interval and makes closure win over refund at the intake boundary. After the applicable refund boundary and only while the batch remains unsettled:
+The 12-hour finality buffer covers the documented OP Stack maximum normal finalized-head lag; the additional five-minute grace begins after that bound and reserves time for inbox publication plus up to three one-minute callback attempts. This conservative on-chain bound is independent of an untrusted builder acknowledgment, so no operator can extend custody by withholding or delaying a finality signal. Closure wins over refund at the intake boundary, while refunds remain permissionless after the fixed bound. After the applicable refund boundary and only while the batch remains unsettled:
 
 1. Anyone may mark the batch `REFUNDABLE`.
 2. Only an order owner may call `cancelExpiredOrder(orderId)` for that owner's `PARKED` order.
@@ -527,6 +533,7 @@ event BatchReady(
 event BatchClosed(
     uint64 indexed batchId,
     uint64 closedAtBlock,
+    uint64 closedAtTimestamp,
     uint8 orderCount,
     bytes32 orderIdsHash,
     uint160 referenceSqrtPriceX96
@@ -562,7 +569,7 @@ The following properties must hold in tests and production:
 2. **Pool binding:** all order, claim, and settlement accounting belongs to the immutable Aura pool.
 3. **Parking curve neutrality:** parking never changes pool price, tick, active liquidity, or other AMM curve state. PoolManager's underlying token custody increases when the router settles the parked input delta.
 4. **Parking custody backing:** for each parked ERC-20 input, the increase in PoolManager custody equals the input backing added for the hook's newly minted ERC-6909 claim.
-5. **Admission bounds:** zero minimum output is rejected, and per-direction input aggregates plus per-currency aggregate minimum-output liabilities never exceed `type(int128).max`.
+5. **Admission and operation bounds:** zero minimum output is rejected; each input, minimum output, per-direction input aggregate, payout, residual, and PoolManager operation fits `type(int128).max`. Full-width aggregate output liabilities may exceed that limit only when deterministic signed-range chunking preserves exact conservation.
 6. **Backing:** claimable liabilities plus protocol dust never exceed hook ERC-6909 holdings per pool and currency.
 7. **Conservation:** settlement closes the PoolManager unlock with zero unresolved currency deltas.
 8. **Uniformity:** every executed order uses the same directed rational price and deterministic rounding rule.
@@ -573,7 +580,7 @@ The following properties must hold in tests and production:
 13. **Callback authentication:** both callback proxy and injected RVM identity must match immutable configuration.
 14. **Unlock authentication:** only PoolManager can invoke `unlockCallback`, and only an active action context is accepted.
 15. **Claim CEI and range:** liability is reduced before the external unlock, the claim entry is non-reentrant, and each claim operation is at most `type(int128).max`; larger balances remain redeemable in partial calls.
-16. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable.
+16. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable; a closed batch cannot become refundable until the fixed finality buffer and post-finality settlement grace have elapsed.
 17. **No arbitrary interaction:** a builder or dispatcher cannot select arbitrary targets, calldata, pools, currencies, or recipients.
 18. **External-service independence:** the solution builder, inbox, RPC, Reactive transport, Circle, Arc, Chainalysis, indexers, and frontend services can fail without blocking on-chain validation, claims, or timeout refunds.
 
@@ -582,11 +589,11 @@ The following properties must hold in tests and production:
 At minimum, the implementation must provide:
 
 - Unit tests for every validation branch and state transition.
-- Fuzz tests for rational price calculations, rounding, zero minimum rejection, aggregate input and minimum-output liability bounds, claim chunking, casts, and overflow boundaries.
+- Fuzz tests for rational price calculations, canonical-price rejection, rounding, zero minimum rejection, aggregate input bounds, full-width payout totals, settlement and claim chunking, casts, and overflow boundaries.
 - Invariant tests for backing, order terminal-state uniqueness, replay resistance, and zero unlock deltas.
 - A perfect CoW case with no pool swap.
 - Both residual directions with only the residual touching the pool, plus fork parity between the production builder quote and pinned v4 execution.
-- Timeout and one-time refund cases.
+- Full one-sided cap, finality-buffer boundary, post-finality settlement grace, bounded callback retry, and one-time refund cases.
 - Unauthorized router, callback proxy, RVM, PoolManager callback, and replay cases.
 - Remix and Slither findings recorded against an exact commit in `docs/remix-audit.md`.
 

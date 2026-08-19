@@ -24,8 +24,11 @@ Target: Aura MVP on Unichain Sepolia
 9. Unbounded batches causing gas denial of service
 10. External service failure blocking sovereign fund recovery
 11. Partial or stale pool state producing an underfunded residual quote
-12. Zero minimum output, aggregate minimum-liability overflow, or oversized claim operations creating unexecutable custody state
+12. Zero minimum output, oversized individual or aggregate inputs, unsafe payout chunking, or oversized claim operations creating unexecutable custody state
 13. Unauthorized or altered solution-inbox publication wasting callback funding
+14. Publisher-selected alternate feasible prices redistributing value between sides
+15. Finality lag consuming the settlement interval before the builder can act
+16. Permanent `DISPATCHED` state after a transient callback failure
 
 ## Mandatory controls
 
@@ -34,12 +37,15 @@ Target: Aura MVP on Unichain Sepolia
 - Validate every solution field on-chain even when the production builder, inbox publisher, and Reactive transport are authorized.
 - Require the production builder to quote from finalized complete PoolManager state through pinned v4 state-view interfaces; ReactVM never substitutes a spot-price estimate for liquidity, fees, bitmap, or initialized-tick state.
 - Authenticate the AuraSolutionInbox publisher, bound the encoded solution arrays, and require the dispatcher to transport the exact recomputed canonical envelope.
+- Derive exactly one canonical rational price from stored `BatchClosed.referenceSqrtPriceX96` plus the feasible interval, and require the hook to recompute and reject every alternative feasible price.
 - Use full-precision rational math with explicit, tested rounding direction.
 - Update liability and terminal-order state before external unlock operations.
 - Require PoolManager as `unlockCallback` caller and authenticate the active action context.
-- Reject zero minimum output and enforce `type(int128).max` on each input, each minimum output, both per-direction input aggregates, and both per-output-currency aggregate minimum liabilities at admission.
+- Reject zero minimum output and enforce `type(int128).max` on each input, minimum output, per-direction input aggregate, individual payout, residual, and PoolManager operation. Keep aggregate payout liabilities in full-width `uint256` and split execution into deterministic signed-range chunks.
 - Enforce hard batch-size bounds and one terminal transition per order.
 - Limit each claim operation to `type(int128).max` while preserving repeated partial redemption of larger account-level balances.
+- Record a two-sided closure timestamp and delay refunds by the fixed 12-hour finality buffer plus five-minute settlement grace; no operator acknowledgment may extend this bound.
+- Treat `DISPATCHED` as pending and permit at most three byte-identical callback attempts, one minute apart, through the authenticated cron trigger; retries never extend the refund boundary.
 - Provide one-time permissionless user claims and owner-only timeout refunds.
 - Keep Circle, Arc, Chainalysis, indexers, and frontend services outside the accounting safety path.
 
@@ -51,10 +57,13 @@ Target: Aura MVP on Unichain Sepolia
 - Both residual directions touch the pool only for the residual amount, and the RPC-backed production quote matches pinned v4 fork execution.
 - Missing, partial, stale, or changed pool state suppresses publication or causes an atomic destination revert without weakening refunds.
 - Unauthorized inbox publication, oversized solution arrays, and altered inbox payloads fail safely.
-- Payouts conserve value within documented rounding dust.
-- Zero minimum output, individual signed-range overflow, aggregate input overflow, aggregate minimum-output liability overflow, deadline, duplicate order, wrong pool, wrong batch, and altered payout checks fail safely.
+- The hook rejects every funded but noncanonical price; builder and hook derive the identical tuple from frozen closure evidence.
+- Payouts conserve value within documented rounding dust, including cases whose full-width aggregate payout exceeds `type(int128).max` and is executed in multiple signed-range chunks.
+- Zero minimum output, individual signed-range overflow, aggregate input overflow, wrong deadline clock/boundary, duplicate order, wrong pool, wrong batch, and altered payout checks fail safely.
 - A claim request above `type(int128).max` reverts before casting or mutation; a larger accumulated balance is fully redeemable through multiple bounded partial claims.
-- Unauthorized callback proxy, RVM, and unlock callers fail.
+- A full one-sided batch never emits `BatchClosed`; finality lag cannot consume the post-finality grace; refund opens exactly after the fixed finality-plus-grace boundary.
+- A missing callback receipt triggers no more than three identical attempts, a delayed `BatchSettled` makes later retries harmless, and retry state cannot postpone refunds.
+- Unauthorized callback proxy, RVM, cron source, and unlock callers fail.
 - Claims and refunds are CEI-safe and cannot replay.
 - Invariant: liabilities plus tracked dust never exceed ERC-6909 holdings for each pool and currency.
 
