@@ -6,8 +6,8 @@ on:
   pull_request:
     branches: [main, master]
 
-env:
-  FOUNDRY_PROFILE: ci
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
@@ -16,43 +16,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: recursive
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: nightly
+          version: v1.7.1
 
-      - name: Run forge install
-        run: forge install
-        working-directory: ./Argos_LTS
+      - name: Show Forge version
+        run: forge --version
+
+      - name: Run forge fmt
+        run: forge fmt --check
 
       - name: Run forge build
         run: forge build --sizes
-        working-directory: ./Argos_LTS
 
-      - name: Run forge test (v1 — original suite)
-        run: forge test --match-path "test/Argos.t.sol" -v
-        working-directory: ./Argos_LTS
-
-      - name: Run forge test (v2 — ArgosLTSHook suite)
-        run: forge test --match-path "test/ArgosLTSHook.t.sol" -v
-        working-directory: ./Argos_LTS
-
-      - name: Run forge test (v2 — ERC-6909 Parking edge cases)
-        run: forge test --match-path "test/ERC6909Parking.t.sol" -v
-        working-directory: ./Argos_LTS
-
-      - name: Run forge test (v2 — ToxicFlow Detection)
-        run: forge test --match-path "test/ToxicFlowDetection.t.sol" -v
-        working-directory: ./Argos_LTS
-
-      - name: Run forge test (Reactive E2E)
-        run: forge test --match-path "test/ReactiveE2E.t.sol" -v
-        working-directory: ./Argos_LTS
-
-      - name: Run all tests (summary)
-        run: forge test --summary
-        working-directory: ./Argos_LTS
+      - name: Run forge tests
+        run: forge test -vvv
