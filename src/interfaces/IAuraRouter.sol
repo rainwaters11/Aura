@@ -13,11 +13,8 @@ interface IAuraRouter {
     /// @param recipient Output-claim recipient; address(0) defaults to the caller.
     /// @param deadline Unix timestamp through which the order remains valid.
     /// @return swapDelta The PoolManager balance delta from the asynchronous parking swap.
-    function placeOrder(
-        bool zeroForOne,
-        uint128 amountIn,
-        uint128 minAmountOut,
-        address recipient,
-        uint64 deadline
-    ) external payable returns (BalanceDelta swapDelta);
+    function placeOrder(bool zeroForOne, uint128 amountIn, uint128 minAmountOut, address recipient, uint64 deadline)
+        external
+        payable
+        returns (BalanceDelta swapDelta);
 }

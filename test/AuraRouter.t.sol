@@ -142,7 +142,11 @@ contract AuraRouterTest is Test {
 
         vm.expectRevert(AuraRouter.InvalidDeadline.selector);
         router.placeOrder(
-            true, AMOUNT_IN, MIN_AMOUNT_OUT, recipient, uint64(block.timestamp + router.MIN_ORDER_LIFETIME_SECONDS() - 1)
+            true,
+            AMOUNT_IN,
+            MIN_AMOUNT_OUT,
+            recipient,
+            uint64(block.timestamp + router.MIN_ORDER_LIFETIME_SECONDS() - 1)
         );
         vm.stopPrank();
     }

@@ -77,13 +77,12 @@ contract AuraRouter is IAuraRouter, IUnlockCallback {
     }
 
     /// @inheritdoc IAuraRouter
-    function placeOrder(
-        bool zeroForOne,
-        uint128 amountIn,
-        uint128 minAmountOut,
-        address recipient,
-        uint64 deadline
-    ) external payable override returns (BalanceDelta swapDelta) {
+    function placeOrder(bool zeroForOne, uint128 amountIn, uint128 minAmountOut, address recipient, uint64 deadline)
+        external
+        payable
+        override
+        returns (BalanceDelta swapDelta)
+    {
         if (_unlocking) revert UnexpectedUnlock();
         if (amountIn == 0 || amountIn > uint128(type(int128).max)) revert InvalidAmount();
         if (minAmountOut == 0 || minAmountOut > uint128(type(int128).max)) revert InvalidMinimumOutput();
@@ -131,8 +130,13 @@ contract AuraRouter is IAuraRouter, IUnlockCallback {
         if (msg.sender != address(poolManager)) revert UnauthorizedUnlockCallback();
         if (!_unlocking) revert UnexpectedUnlock();
 
-        (address owner, Currency inputCurrency, uint128 amountIn, SwapParams memory params, AuraOrderData memory order) =
-            abi.decode(data, (address, Currency, uint128, SwapParams, AuraOrderData));
+        (
+            address owner,
+            Currency inputCurrency,
+            uint128 amountIn,
+            SwapParams memory params,
+            AuraOrderData memory order
+        ) = abi.decode(data, (address, Currency, uint128, SwapParams, AuraOrderData));
 
         BalanceDelta swapDelta = poolManager.swap(auraPoolKey(), params, abi.encode(order));
         inputCurrency.settle(poolManager, owner, amountIn, false);
