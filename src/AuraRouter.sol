@@ -83,7 +83,7 @@ contract AuraRouter is IAuraRouter, IUnlockCallback {
         uint128 minAmountOut,
         address recipient,
         uint64 deadline
-    ) external payable returns (BalanceDelta swapDelta) {
+    ) external payable override returns (BalanceDelta swapDelta) {
         if (_unlocking) revert UnexpectedUnlock();
         if (amountIn == 0 || amountIn > uint128(type(int128).max)) revert InvalidAmount();
         if (minAmountOut == 0 || minAmountOut > uint128(type(int128).max)) revert InvalidMinimumOutput();
@@ -127,7 +127,7 @@ contract AuraRouter is IAuraRouter, IUnlockCallback {
     /// @notice Executes one router-authenticated parking swap and settles its input delta.
     /// @dev Only PoolManager may call this callback. Its data is created internally by `placeOrder`;
     ///      users cannot choose a PoolKey, owner, nonce, or hook payload.
-    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+    function unlockCallback(bytes calldata data) external override returns (bytes memory) {
         if (msg.sender != address(poolManager)) revert UnauthorizedUnlockCallback();
         if (!_unlocking) revert UnexpectedUnlock();
 
