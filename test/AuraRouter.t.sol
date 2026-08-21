@@ -158,8 +158,9 @@ contract AuraRouterTest is Test {
 
     function test_placeOrderSettlesNativeInput() public {
         AuraRouterPoolManagerMock nativePoolManager = new AuraRouterPoolManagerMock();
-        PoolKey memory nativePoolKey =
-            PoolKey(Currency.wrap(address(0)), Currency.wrap(address(token1)), 3000, 60, IHooks(makeAddr("nativeHook")));
+        PoolKey memory nativePoolKey = PoolKey(
+            Currency.wrap(address(0)), Currency.wrap(address(token1)), 3000, 60, IHooks(makeAddr("nativeHook"))
+        );
         AuraRouter nativeRouter = new AuraRouter(IPoolManager(address(nativePoolManager)), nativePoolKey);
         uint64 deadline = uint64(block.timestamp + nativeRouter.MIN_ORDER_LIFETIME_SECONDS());
 
