@@ -183,6 +183,20 @@ contract AuraRouterIntegrationTest is BaseTest {
         assertEq(postLiquidity, preLiquidity);
     }
 
+    function test_placeOrder_Integration_ScopesBackingToSpecifiedCurrency() public {
+        uint64 deadline = uint64(block.timestamp + router.MIN_ORDER_LIFETIME_SECONDS());
+        uint256 preCurrency0Claim = poolManager.balanceOf(address(hook), currency0.toId());
+        uint256 preCurrency1Claim = poolManager.balanceOf(address(hook), currency1.toId());
+        uint256 preCurrency1Custody = MockERC20(Currency.unwrap(currency1)).balanceOf(address(poolManager));
+
+        vm.prank(owner);
+        router.placeOrder(false, AMOUNT_IN, MIN_AMOUNT_OUT, recipient, deadline);
+
+        assertEq(poolManager.balanceOf(address(hook), currency0.toId()), preCurrency0Claim);
+        assertEq(poolManager.balanceOf(address(hook), currency1.toId()) - preCurrency1Claim, AMOUNT_IN);
+        assertEq(MockERC20(Currency.unwrap(currency1)).balanceOf(address(poolManager)) - preCurrency1Custody, AMOUNT_IN);
+    }
+
     function test_placeOrder_Integration_RejectsUnauthorizedRouter() public {
         AuraOrderData memory order = AuraOrderData({
             version: router.ORDER_DATA_VERSION(),
