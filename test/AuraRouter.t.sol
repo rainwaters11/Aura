@@ -140,14 +140,9 @@ contract AuraRouterTest is Test {
         vm.expectRevert(AuraRouter.InvalidMinimumOutput.selector);
         router.placeOrder(true, AMOUNT_IN, uint128(type(int128).max) + 1, recipient, validDeadline);
 
+        uint64 tooShortDeadline = uint64(block.timestamp + router.MIN_ORDER_LIFETIME_SECONDS() - 1);
         vm.expectRevert(AuraRouter.InvalidDeadline.selector);
-        router.placeOrder(
-            true,
-            AMOUNT_IN,
-            MIN_AMOUNT_OUT,
-            recipient,
-            uint64(block.timestamp + router.MIN_ORDER_LIFETIME_SECONDS() - 1)
-        );
+        router.placeOrder(true, AMOUNT_IN, MIN_AMOUNT_OUT, recipient, tooShortDeadline);
         vm.stopPrank();
     }
 
