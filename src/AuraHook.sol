@@ -349,7 +349,6 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         _requireCompatible(admission.batchId, zeroForOne, amountIn, minAmountOut);
     }
 
-
     function _readyClosurePreflight(uint64 batchId) internal view returns (bool) {
         (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
         if (!hasZeroForOne || !hasOneForZero) return false;

@@ -265,7 +265,9 @@ contract AuraParkingTest is AuraParkingBase {
 
         vm.expectRevert(AuraHook.BatchRefundGraceActive.selector);
         hook.closeBatch(1);
-        vm.warp(uint256(hook.closedAtTimestamp(1)) + hook.MAX_FINALITY_LAG_SECONDS() + hook.SETTLEMENT_GRACE_SECONDS() + 1);
+        vm.warp(
+            uint256(hook.closedAtTimestamp(1)) + hook.MAX_FINALITY_LAG_SECONDS() + hook.SETTLEMENT_GRACE_SECONDS() + 1
+        );
         hook.closeBatch(1);
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
 
