@@ -339,7 +339,7 @@ $$
 P_{target} = \frac{l_n u_d + u_n l_d}{2 l_d u_d}
 $$
 
-The midpoint components are computed with checked full-precision arithmetic and reduced by their GCD. If the reduced midpoint does not fit two nonzero `uint128` values, apply the normative continued-fraction/Stern--Brocot best bounded-rational approximation constrained to the closed feasible interval. Candidate selection uses absolute error from the exact midpoint, then smaller numeric rational, then the lexicographically smaller normalized `(p_n, p_d)` tuple as deterministic tie-breaks. `AuraHook` recomputes this exact candidate from frozen order bounds and rejects every other feasible price. The closer, fourth-order submitter, pool spot price, builder, and publisher therefore cannot choose the clearing price.
+The midpoint components are computed with checked full-precision arithmetic and reduced by their GCD. If the reduced midpoint does not fit two nonzero `uint128` values, `AuraHook` uses the deployable bounded fallback constrained to the closed feasible interval: it selects normalized `1/1` whenever that neutral price is feasible, otherwise it selects the normalized greatest lower bound `L`. This deterministic rule is derived only from frozen user bounds and is used before payout validation; it prevents an oversized exact midpoint from forcing an otherwise encodable batch refundable. `AuraHook` recomputes this exact candidate from frozen order bounds and rejects every other feasible price. The closer, fourth-order submitter, pool spot price, builder, and publisher therefore cannot choose the clearing price.
 
 For a token0 input order:
 
