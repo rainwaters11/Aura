@@ -170,7 +170,7 @@ Requirements:
 - consume integer strings from fixtures;
 - preserve the frozen stored order committed by `BatchClosed` and verify its membership hash;
 - reject short-horizon deadlines and any incoming order that would make the prospective two-sided feasible interval empty;
-- derive the sole canonical rational from the exact midpoint of frozen feasible bounds, treat `BatchClosed.referenceSqrtPriceX96` as telemetry only, reject alternate feasible prices, and output deadline-horizon validation, individual-encoding preflight, payouts, full-width totals, signed-range chunks, matched amounts, residual, and hash inputs;
+- derive the sole canonical rational from the exact midpoint of frozen feasible bounds or the documented oversized bounded fallback, assert the canonical vectors in `docs/agent.md`, treat `BatchClosed.referenceSqrtPriceX96` as telemetry only, reject alternate feasible prices, and output deadline-horizon validation, individual-encoding preflight, payouts, full-width totals, signed-range chunks, matched amounts, residual, and hash inputs;
 - compare results with Solidity test vectors;
 - exit nonzero on an invalid fixture marked as expected-valid or a mismatch.
 
@@ -192,7 +192,7 @@ Requirements:
 - verify chain ID 1301 and the immutable AuraHook, PoolManager, AuraSolutionInbox, and PoolKey addresses;
 - read a finalized block and record only its public number and hash;
 - obtain slot0, active liquidity, LP and protocol fees, tick bitmap, and every initialized tick crossed by the candidate through pinned v4 state-view interfaces;
-- derive the sole destination-verifiable canonical price from the frozen feasible-interval midpoint, confirm every individual payout passed closure encoding bounds, run integer-identical quote math for only that candidate, and compare it with a forked pinned-v4 execution;
+- derive the sole destination-verifiable canonical price from the frozen feasible-interval midpoint or oversized bounded fallback, confirm the canonical vectors and every individual payout passed closure encoding bounds, run integer-identical quote math for only that candidate, and compare it with a forked pinned-v4 execution;
 - fail closed when any state field, tick, block hash, or conservation check is missing or changes;
 - load no publisher key, send no transaction, and emit no `SolutionProposed` event.
 
@@ -285,7 +285,7 @@ Confirm:
 - deployer has sufficient test ETH and no unexpected production funds;
 - contract verification endpoint is reachable;
 - the exact Git commit is clean and CI is green;
-- a `solution-builder-readonly` run proves complete finalized state access, frozen-midpoint canonical-price parity, individual-payout encoding safety, and fork-quote parity without loading a publisher credential;
+- a `solution-builder-readonly` run proves complete finalized state access, frozen-midpoint and oversized-fallback canonical-price parity, canonical-vector coverage, individual-payout encoding safety, and fork-quote parity without loading a publisher credential;
 - the deployed minimum order lifetime, finality buffer, post-finality grace, retry delay, retry-attempt cap, pending-retry capacity, timeout-preflight transition, feasible-interval admission rule, and Unix-deadline comparisons equal the normative `BASELINE.md` values.
 
 Do not request or print secret values. Report variable names and validation status only.
