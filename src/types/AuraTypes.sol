@@ -11,3 +11,37 @@ struct AuraOrderData {
     uint64 deadline;
     uint128 minAmountOut;
 }
+
+/// @notice Lifecycle of an order admitted into Aura custody.
+enum OrderStatus {
+    NONE,
+    PARKED,
+    SETTLED,
+    CANCELLED,
+    CLAIMED
+}
+
+/// @notice Lifecycle of a bounded Aura batch.
+enum BatchStatus {
+    NONE,
+    OPEN,
+    READY,
+    CLOSED,
+    SETTLING,
+    SETTLED,
+    FAILED,
+    REFUNDABLE
+}
+
+/// @notice Immutable facts recorded when an order is parked.
+struct ParkedOrder {
+    address owner;
+    address recipient;
+    uint64 batchId;
+    uint64 deadline;
+    uint64 nonce;
+    bool zeroForOne;
+    uint128 amountIn;
+    uint128 minAmountOut;
+    OrderStatus status;
+}
