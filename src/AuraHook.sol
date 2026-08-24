@@ -23,6 +23,8 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     uint8 public constant ORDER_DATA_VERSION = 1;
     uint8 public constant MAX_BATCH_ORDERS = 4;
     uint64 public constant MAX_BATCH_WINDOW = 20;
+    uint64 public constant MAX_FINALITY_LAG_SECONDS = 12 hours;
+    uint64 public constant SETTLEMENT_GRACE_SECONDS = 5 minutes;
     uint64 public constant MIN_ORDER_LIFETIME_SECONDS = 13 hours;
 
     bytes32 public constant ORDER_TYPEHASH = keccak256(
@@ -39,6 +41,8 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     mapping(uint64 batchId => bytes32[]) internal _batchOrderIds;
     mapping(uint64 batchId => BatchStatus) public batchStatus;
     mapping(uint64 batchId => uint64) public openedAtBlock;
+    mapping(uint64 batchId => uint64) public closedAtBlock;
+    mapping(uint64 batchId => uint64) public closedAtTimestamp;
     mapping(uint64 batchId => uint256) public aggregateToken0Input;
     mapping(uint64 batchId => uint256) public aggregateToken1Input;
     mapping(uint64 batchId => uint256) public aggregateMinToken0Output;
@@ -63,6 +67,9 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     error BatchNotOpen();
     error BatchNotRefundable();
     error BatchWindowActive();
+    error BatchRefundGraceActive();
+    error BatchIntakeClosed();
+    error BatchClosurePreflightFailed();
     error TwoSidedBatch();
     error OrderNotParked();
     error UnauthorizedOrderOwner();
@@ -82,6 +89,15 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     );
 
     event BatchReady(uint64 indexed batchId, uint64 openedAtBlock, uint8 orderCount, uint160 referenceSqrtPriceX96);
+
+    event BatchClosed(
+        uint64 indexed batchId,
+        uint64 closedAtBlock,
+        uint64 closedAtTimestamp,
+        uint8 orderCount,
+        bytes32 orderIdsHash,
+        uint160 referenceSqrtPriceX96
+    );
 
     event OrderCancelled(bytes32 indexed orderId, address indexed owner, Currency token, uint256 amount);
 
@@ -124,14 +140,25 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         return _batchOrderIds[batchId].length;
     }
 
-    /// @notice Makes a timed-out one-sided batch immediately refundable.
-    /// @dev Two-sided closure belongs to settlement and cannot use this escape path.
+    /// @notice Advances a timed-out batch through its bounded close and refund lifecycle.
     function closeBatch(uint64 batchId) external {
-        if (batchStatus[batchId] != BatchStatus.OPEN) revert BatchNotOpen();
+        BatchStatus status = batchStatus[batchId];
+        if (status == BatchStatus.CLOSED) {
+            if (
+                block.timestamp
+                    <= uint256(closedAtTimestamp[batchId]) + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS
+            ) revert BatchRefundGraceActive();
+            batchStatus[batchId] = BatchStatus.REFUNDABLE;
+            return;
+        }
+        if (status != BatchStatus.OPEN && status != BatchStatus.READY) revert BatchNotOpen();
         if (block.number <= uint256(openedAtBlock[batchId]) + MAX_BATCH_WINDOW) revert BatchWindowActive();
-        (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
-        if (hasZeroForOne && hasOneForZero) revert TwoSidedBatch();
-        batchStatus[batchId] = BatchStatus.REFUNDABLE;
+
+        if (status == BatchStatus.READY && _readyClosurePreflight(batchId)) {
+            _closeReadyBatch(batchId);
+        } else {
+            batchStatus[batchId] = BatchStatus.REFUNDABLE;
+        }
     }
 
     /// @notice Cancels one caller-owned parked order after its batch becomes refundable.
@@ -194,9 +221,11 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        // BaseAsyncSwap deliberately lets exact-output swaps execute on the PoolManager normally.
+        if (params.amountSpecified >= 0) return super._beforeSwap(sender, key, params, hookData);
+
         if (sender != address(auraRouter)) revert UnauthorizedRouter();
         if (PoolId.unwrap(key.toId()) != PoolId.unwrap(auraPoolId)) revert InvalidPool();
-        if (params.amountSpecified >= 0) revert ExactOutputUnsupported();
         PendingOrder memory pending = _prepareOrder(params, hookData);
 
         // The audited OpenZeppelin path takes the exact input as a PoolManager ERC-6909 claim.
@@ -283,10 +312,12 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
             aggregateMinToken0Output[batchId] += order.minAmountOut;
             admission.hasOneForZero = true;
         }
+        uint256 orderCount = admission.count + 1;
         if (admission.hasZeroForOne && admission.hasOneForZero && batchStatus[batchId] == BatchStatus.OPEN) {
             batchStatus[batchId] = BatchStatus.READY;
-            emit BatchReady(batchId, openedAtBlock[batchId], uint8(admission.count + 1), 0);
+            emit BatchReady(batchId, openedAtBlock[batchId], uint8(orderCount), 0);
         }
+        if (orderCount == MAX_BATCH_ORDERS) _closeReadyBatch(batchId);
     }
 
     function _validateBatch(bool zeroForOne, uint128 amountIn, uint128 minAmountOut)
@@ -296,7 +327,11 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     {
         admission.batchId = activeBatchId == 0 ? 1 : activeBatchId;
         BatchStatus status = batchStatus[admission.batchId];
-        if (status != BatchStatus.NONE && status != BatchStatus.OPEN && status != BatchStatus.READY) {
+        if (status == BatchStatus.OPEN || status == BatchStatus.READY) {
+            if (block.number > uint256(openedAtBlock[admission.batchId]) + MAX_BATCH_WINDOW) {
+                revert BatchIntakeClosed();
+            }
+        } else if (status != BatchStatus.NONE) {
             if (admission.batchId == type(uint64).max) revert BatchIdOverflow();
             ++admission.batchId;
         }
@@ -312,6 +347,37 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
             : aggregateToken1Input[admission.batchId] + amountIn;
         if (admission.nextAggregate > uint256(uint128(type(int128).max))) revert AmountOverflow();
         _requireCompatible(admission.batchId, zeroForOne, amountIn, minAmountOut);
+    }
+
+
+    function _readyClosurePreflight(uint64 batchId) internal view returns (bool) {
+        (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
+        if (!hasZeroForOne || !hasOneForZero) return false;
+
+        uint256 refundBoundary = block.timestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS;
+        bytes32[] storage ids = _batchOrderIds[batchId];
+        for (uint256 i; i < ids.length; ++i) {
+            if (uint256(orders[ids[i]].deadline) < refundBoundary) return false;
+        }
+        return true;
+    }
+
+    function _closeReadyBatch(uint64 batchId) internal {
+        if (!_readyClosurePreflight(batchId)) revert BatchClosurePreflightFailed();
+
+        uint64 closedBlock = uint64(block.number);
+        uint64 closedTimestamp = uint64(block.timestamp);
+        batchStatus[batchId] = BatchStatus.CLOSED;
+        closedAtBlock[batchId] = closedBlock;
+        closedAtTimestamp[batchId] = closedTimestamp;
+        emit BatchClosed(
+            batchId,
+            closedBlock,
+            closedTimestamp,
+            uint8(_batchOrderIds[batchId].length),
+            keccak256(abi.encode(_batchOrderIds[batchId])),
+            0
+        );
     }
 
     function _directions(uint64 batchId) internal view returns (bool zeroForOne, bool oneForZero) {

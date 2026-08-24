@@ -139,13 +139,13 @@ contract AuraParkingTest is AuraParkingBase {
         hook.beforeSwap(address(router), wrong, _params(true, -int256(uint256(AMOUNT))), _data(0));
     }
 
-    function test_rejectsExactOutputAndMalformedData() public {
+    function test_passesExactOutputThroughAndRejectsMalformedData() public {
         vm.startPrank(address(poolManager));
-        vm.expectRevert(AuraHook.ExactOutputUnsupported.selector);
-        hook.beforeSwap(address(router), key, _params(true, int256(uint256(AMOUNT))), _data(0));
+        hook.beforeSwap(address(this), key, _params(true, int256(uint256(AMOUNT))), hex"");
         vm.expectRevert(AuraHook.MalformedOrderData.selector);
         hook.beforeSwap(address(router), key, _params(true, -int256(uint256(AMOUNT))), hex"01");
         vm.stopPrank();
+        assertEq(hook.batchOrderCount(1), 0);
     }
 
     function test_rejectsExpiredInvalidAndOverflowOrders() public {
@@ -254,12 +254,45 @@ contract AuraParkingTest is AuraParkingBase {
         hook.unlockCallback(abi.encode(orderId));
     }
 
-    function test_readyBatchCannotUseOneSidedTimeoutClose() public {
+    function test_readyBatchClosesThenBecomesRefundableAfterGrace() public {
         _place(true, AMOUNT, MINIMUM);
         _place(false, AMOUNT, MINIMUM);
+        bytes32[] memory ids = hook.batchOrderIds(1);
+
         vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
-        vm.expectRevert(AuraHook.BatchNotOpen.selector);
         hook.closeBatch(1);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
+
+        vm.expectRevert(AuraHook.BatchRefundGraceActive.selector);
+        hook.closeBatch(1);
+        vm.warp(uint256(hook.closedAtTimestamp(1)) + hook.MAX_FINALITY_LAG_SECONDS() + hook.SETTLEMENT_GRACE_SECONDS() + 1);
+        hook.closeBatch(1);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
+
+        vm.prank(owner);
+        hook.cancelExpiredOrder(ids[0]);
+        vm.prank(owner);
+        hook.cancelExpiredOrder(ids[1]);
+    }
+
+    function test_fullReadyBatchClosesAndNextOrderUsesFreshBatch() public {
+        _place(true, AMOUNT, MINIMUM);
+        _place(false, AMOUNT, MINIMUM);
+        _place(true, AMOUNT, MINIMUM);
+        _place(false, AMOUNT, MINIMUM);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
+
+        _place(true, AMOUNT, MINIMUM);
+        assertEq(hook.activeBatchId(), 2);
+        assertEq(hook.batchOrderCount(2), 1);
+    }
+
+    function test_rejectsAdmissionAfterIntakeWindow() public {
+        _place(true, AMOUNT, MINIMUM);
+        vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
+        vm.prank(owner);
+        vm.expectRevert(AuraHook.BatchIntakeClosed.selector);
+        router.placeOrder(true, AMOUNT, MINIMUM, owner, uint64(block.timestamp + 13 hours));
     }
 
     function _assertParking(bool zeroForOne) internal {
