@@ -539,8 +539,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         uint256 targetDen,
         uint256 otherDenominator
     ) internal pure returns (Uint768 memory value) {
-        (uint256 errorHigh, uint256 errorLow) =
-            _absProductDifference(numerator, targetDen, targetNum, denominator);
+        (uint256 errorHigh, uint256 errorLow) = _absProductDifference(numerator, targetDen, targetNum, denominator);
         (value.top, value.middle, value.bottom) = _mul512ByUint128(errorHigh, errorLow, otherDenominator);
     }
 
