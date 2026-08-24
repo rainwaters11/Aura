@@ -192,6 +192,76 @@ contract AuraParkingTest is AuraParkingBase {
         router.placeOrder(false, AMOUNT, MINIMUM, owner, uint64(block.timestamp + 13 hours));
     }
 
+    function test_oneSidedTimeoutRefundBurnsClaimAndReturnsExactInput() public {
+        uint256 ownerBefore = MockERC20(Currency.unwrap(currency0)).balanceOf(owner);
+        _place(true, AMOUNT, MINIMUM);
+        bytes32 orderId = hook.batchOrderIds(1)[0];
+        assertEq(MockERC20(Currency.unwrap(currency0)).balanceOf(owner), ownerBefore - AMOUNT);
+
+        vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
+        hook.closeBatch(1);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
+
+        vm.prank(owner);
+        hook.cancelExpiredOrder(orderId);
+        (,,,,,,,, OrderStatus status) = hook.orders(orderId);
+        assertEq(uint8(status), uint8(OrderStatus.CANCELLED));
+        assertEq(poolManager.balanceOf(address(hook), currency0.toId()), 0);
+        assertEq(MockERC20(Currency.unwrap(currency0)).balanceOf(owner), ownerBefore);
+        assertEq(poolManager.currencyDelta(address(hook), currency0), 0);
+
+        _place(false, AMOUNT, MINIMUM);
+        assertEq(hook.activeBatchId(), 2);
+        assertEq(hook.batchOrderCount(2), 1);
+    }
+
+    function test_timeoutBoundaryIsStrictAndCloseIsPermissionless() public {
+        _place(true, AMOUNT, MINIMUM);
+        uint256 boundary = uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW();
+        vm.roll(boundary);
+        vm.expectRevert(AuraHook.BatchWindowActive.selector);
+        hook.closeBatch(1);
+
+        vm.roll(boundary + 1);
+        vm.prank(makeAddr("closer"));
+        hook.closeBatch(1);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
+    }
+
+    function test_refundRejectsEarlyWrongOwnerReplayAndDirectCallback() public {
+        _place(true, AMOUNT, MINIMUM);
+        bytes32 orderId = hook.batchOrderIds(1)[0];
+        vm.prank(owner);
+        vm.expectRevert(AuraHook.BatchNotRefundable.selector);
+        hook.cancelExpiredOrder(orderId);
+
+        vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
+        hook.closeBatch(1);
+        vm.prank(makeAddr("attacker"));
+        vm.expectRevert(AuraHook.UnauthorizedOrderOwner.selector);
+        hook.cancelExpiredOrder(orderId);
+
+        vm.prank(owner);
+        hook.cancelExpiredOrder(orderId);
+        vm.prank(owner);
+        vm.expectRevert(AuraHook.OrderNotParked.selector);
+        hook.cancelExpiredOrder(orderId);
+
+        vm.expectRevert(AuraHook.UnauthorizedUnlockCallback.selector);
+        hook.unlockCallback(abi.encode(orderId));
+        vm.prank(address(poolManager));
+        vm.expectRevert(AuraHook.InvalidRefundContext.selector);
+        hook.unlockCallback(abi.encode(orderId));
+    }
+
+    function test_readyBatchCannotUseOneSidedTimeoutClose() public {
+        _place(true, AMOUNT, MINIMUM);
+        _place(false, AMOUNT, MINIMUM);
+        vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
+        vm.expectRevert(AuraHook.BatchNotOpen.selector);
+        hook.closeBatch(1);
+    }
+
     function _assertParking(bool zeroForOne) internal {
         Currency input = zeroForOne ? currency0 : currency1;
         uint256 claimsBefore = poolManager.balanceOf(address(hook), input.toId());

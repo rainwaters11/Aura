@@ -6,8 +6,9 @@ import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 import {IPoolManager, SwapParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 
 import {IAuraRouter} from "./interfaces/IAuraRouter.sol";
 import {AuraOrderData, ParkedOrder, OrderStatus, BatchStatus} from "./types/AuraTypes.sol";
@@ -15,11 +16,13 @@ import {AuraOrderData, ParkedOrder, OrderStatus, BatchStatus} from "./types/Aura
 /// @title AuraHook
 /// @notice Authenticated, bounded exact-input order parking for one Aura pool.
 /// @dev Settlement and redemption deliberately remain outside this Sprint 1 contract.
-contract AuraHook is BaseAsyncSwap {
+contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     using PoolIdLibrary for PoolKey;
+    using CurrencyLibrary for Currency;
 
     uint8 public constant ORDER_DATA_VERSION = 1;
     uint8 public constant MAX_BATCH_ORDERS = 4;
+    uint64 public constant MAX_BATCH_WINDOW = 20;
     uint64 public constant MIN_ORDER_LIFETIME_SECONDS = 13 hours;
 
     bytes32 public constant ORDER_TYPEHASH = keccak256(
@@ -28,6 +31,8 @@ contract AuraHook is BaseAsyncSwap {
 
     IAuraRouter public immutable auraRouter;
     PoolId public immutable auraPoolId;
+    Currency private immutable _currency0;
+    Currency private immutable _currency1;
 
     uint64 public activeBatchId;
     mapping(bytes32 orderId => ParkedOrder) public orders;
@@ -38,6 +43,9 @@ contract AuraHook is BaseAsyncSwap {
     mapping(uint64 batchId => uint256) public aggregateToken1Input;
     mapping(uint64 batchId => uint256) public aggregateMinToken0Output;
     mapping(uint64 batchId => uint256) public aggregateMinToken1Output;
+
+    bool private _refundUnlocking;
+    bytes32 private _refundOrderId;
 
     error InvalidRouter();
     error UnauthorizedRouter();
@@ -52,6 +60,15 @@ contract AuraHook is BaseAsyncSwap {
     error BatchCapacityExceeded();
     error DirectionCapacityReserved();
     error IncompatibleLimits();
+    error BatchNotOpen();
+    error BatchNotRefundable();
+    error BatchWindowActive();
+    error TwoSidedBatch();
+    error OrderNotParked();
+    error UnauthorizedOrderOwner();
+    error UnauthorizedUnlockCallback();
+    error InvalidRefundContext();
+    error BatchIdOverflow();
 
     event OrderParked(
         uint64 indexed batchId,
@@ -65,6 +82,8 @@ contract AuraHook is BaseAsyncSwap {
     );
 
     event BatchReady(uint64 indexed batchId, uint64 openedAtBlock, uint8 orderCount, uint160 referenceSqrtPriceX96);
+
+    event OrderCancelled(bytes32 indexed orderId, address indexed owner, Currency token, uint256 amount);
 
     struct Admission {
         uint64 batchId;
@@ -91,6 +110,8 @@ contract AuraHook is BaseAsyncSwap {
     ) BaseHook(manager) {
         if (address(router) == address(0)) revert InvalidRouter();
         auraRouter = router;
+        _currency0 = currency0;
+        _currency1 = currency1;
         auraPoolId = PoolKey(currency0, currency1, fee, tickSpacing, this).toId();
         if (PoolId.unwrap(router.auraPoolId()) != PoolId.unwrap(auraPoolId)) revert InvalidPool();
     }
@@ -101,6 +122,49 @@ contract AuraHook is BaseAsyncSwap {
 
     function batchOrderCount(uint64 batchId) external view returns (uint256) {
         return _batchOrderIds[batchId].length;
+    }
+
+    /// @notice Makes a timed-out one-sided batch immediately refundable.
+    /// @dev Two-sided closure belongs to settlement and cannot use this escape path.
+    function closeBatch(uint64 batchId) external {
+        if (batchStatus[batchId] != BatchStatus.OPEN) revert BatchNotOpen();
+        if (block.number <= uint256(openedAtBlock[batchId]) + MAX_BATCH_WINDOW) revert BatchWindowActive();
+        (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
+        if (hasZeroForOne && hasOneForZero) revert TwoSidedBatch();
+        batchStatus[batchId] = BatchStatus.REFUNDABLE;
+    }
+
+    /// @notice Cancels one caller-owned parked order after its batch becomes refundable.
+    function cancelExpiredOrder(bytes32 orderId) external {
+        ParkedOrder storage order = orders[orderId];
+        if (order.status != OrderStatus.PARKED) revert OrderNotParked();
+        if (order.owner != msg.sender) revert UnauthorizedOrderOwner();
+        if (batchStatus[order.batchId] != BatchStatus.REFUNDABLE) revert BatchNotRefundable();
+
+        order.status = OrderStatus.CANCELLED;
+        _refundUnlocking = true;
+        _refundOrderId = orderId;
+        poolManager.unlock(abi.encode(orderId));
+        _refundUnlocking = false;
+        _refundOrderId = bytes32(0);
+
+        Currency token = order.zeroForOne ? _currency0 : _currency1;
+        emit OrderCancelled(orderId, order.owner, token, order.amountIn);
+    }
+
+    /// @inheritdoc IUnlockCallback
+    function unlockCallback(bytes calldata rawData) external override returns (bytes memory) {
+        if (msg.sender != address(poolManager)) revert UnauthorizedUnlockCallback();
+        if (!_refundUnlocking) revert InvalidRefundContext();
+        bytes32 orderId = abi.decode(rawData, (bytes32));
+        if (orderId != _refundOrderId) revert InvalidRefundContext();
+
+        ParkedOrder storage order = orders[orderId];
+        if (order.status != OrderStatus.CANCELLED) revert InvalidRefundContext();
+        Currency token = order.zeroForOne ? _currency0 : _currency1;
+        poolManager.burn(address(this), token.toId(), order.amountIn);
+        poolManager.take(token, order.owner, order.amountIn);
+        return "";
     }
 
     function computeOrderId(AuraOrderData memory order, bool zeroForOne, uint128 amountIn)
@@ -231,6 +295,11 @@ contract AuraHook is BaseAsyncSwap {
         returns (Admission memory admission)
     {
         admission.batchId = activeBatchId == 0 ? 1 : activeBatchId;
+        BatchStatus status = batchStatus[admission.batchId];
+        if (status != BatchStatus.NONE && status != BatchStatus.OPEN && status != BatchStatus.READY) {
+            if (admission.batchId == type(uint64).max) revert BatchIdOverflow();
+            ++admission.batchId;
+        }
         admission.count = _batchOrderIds[admission.batchId].length;
         if (admission.count >= MAX_BATCH_ORDERS) revert BatchCapacityExceeded();
         (admission.hasZeroForOne, admission.hasOneForZero) = _directions(admission.batchId);
