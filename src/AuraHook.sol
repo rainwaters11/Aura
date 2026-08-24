@@ -353,36 +353,9 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     }
 
     function _readyClosurePreflight(uint64 batchId) internal view returns (bool) {
-        (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
-        if (!hasZeroForOne || !hasOneForZero) return false;
+        (uint256 lowerNum, uint256 lowerDen, uint256 upperNum, uint256 upperDen, bool valid) = _frozenBounds(batchId);
+        if (!valid) return false;
 
-        uint256 lowerNum;
-        uint256 lowerDen = 1;
-        uint256 upperNum;
-        uint256 upperDen;
-        uint256 refundBoundary = block.timestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS;
-        bytes32[] storage ids = _batchOrderIds[batchId];
-
-        for (uint256 i; i < ids.length; ++i) {
-            ParkedOrder storage order = orders[ids[i]];
-            if (uint256(order.deadline) < refundBoundary) return false;
-
-            if (order.zeroForOne) {
-                if (lowerNum * order.amountIn < uint256(order.minAmountOut) * lowerDen) {
-                    (lowerNum, lowerDen) = (order.minAmountOut, order.amountIn);
-                }
-            } else if (upperDen == 0 || upperNum * order.minAmountOut > uint256(order.amountIn) * upperDen) {
-                (upperNum, upperDen) = (order.amountIn, order.minAmountOut);
-            }
-        }
-
-        if (lowerNum == 0 || upperDen == 0) return false;
-        uint256 lowerDivisor = _gcd(lowerNum, lowerDen);
-        lowerNum /= lowerDivisor;
-        lowerDen /= lowerDivisor;
-        uint256 upperDivisor = _gcd(upperNum, upperDen);
-        upperNum /= upperDivisor;
-        upperDen /= upperDivisor;
         uint256 priceNum = lowerNum * upperDen + upperNum * lowerDen;
         uint256 priceDen = 2 * lowerDen * upperDen;
         uint256 divisor = _gcd(priceNum, priceDen);
@@ -395,6 +368,46 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
             if (priceNum == 0 || priceDen == 0) return false;
         }
 
+        return _payoutsEncodable(batchId, priceNum, priceDen);
+    }
+
+    function _frozenBounds(uint64 batchId)
+        internal
+        view
+        returns (uint256 lowerNum, uint256 lowerDen, uint256 upperNum, uint256 upperDen, bool valid)
+    {
+        (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
+        if (!hasZeroForOne || !hasOneForZero) return (0, 0, 0, 0, false);
+
+        lowerDen = 1;
+        uint256 refundBoundary = block.timestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS;
+        bytes32[] storage ids = _batchOrderIds[batchId];
+
+        for (uint256 i; i < ids.length; ++i) {
+            ParkedOrder storage order = orders[ids[i]];
+            if (uint256(order.deadline) < refundBoundary) return (0, 0, 0, 0, false);
+
+            if (order.zeroForOne) {
+                if (lowerNum * order.amountIn < uint256(order.minAmountOut) * lowerDen) {
+                    (lowerNum, lowerDen) = (order.minAmountOut, order.amountIn);
+                }
+            } else if (upperDen == 0 || upperNum * order.minAmountOut > uint256(order.amountIn) * upperDen) {
+                (upperNum, upperDen) = (order.amountIn, order.minAmountOut);
+            }
+        }
+
+        if (lowerNum == 0 || upperDen == 0) return (0, 0, 0, 0, false);
+        uint256 lowerDivisor = _gcd(lowerNum, lowerDen);
+        lowerNum /= lowerDivisor;
+        lowerDen /= lowerDivisor;
+        uint256 upperDivisor = _gcd(upperNum, upperDen);
+        upperNum /= upperDivisor;
+        upperDen /= upperDivisor;
+        valid = true;
+    }
+
+    function _payoutsEncodable(uint64 batchId, uint256 priceNum, uint256 priceDen) internal view returns (bool) {
+        bytes32[] storage ids = _batchOrderIds[batchId];
         for (uint256 i; i < ids.length; ++i) {
             ParkedOrder storage order = orders[ids[i]];
             uint256 payout = order.zeroForOne
