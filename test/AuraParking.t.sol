@@ -298,14 +298,14 @@ contract AuraParkingTest is AuraParkingBase {
         router.placeOrder(true, AMOUNT, MINIMUM, owner, uint64(block.timestamp + 13 hours));
     }
 
-    function test_timeoutMakesUnencodableCanonicalPayoutRefundable() public {
+    function test_timeoutClosesWithBoundedMidpointFallback() public {
         uint128 maxInput = uint128(type(int128).max);
         _place(true, maxInput, 1);
         _place(false, maxInput, 1);
 
         vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
         hook.closeBatch(1);
-        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
     }
 
     function test_timeoutClosesWithBoundedMidpointApproximation() public {
