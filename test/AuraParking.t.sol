@@ -308,6 +308,17 @@ contract AuraParkingTest is AuraParkingBase {
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
     }
 
+    function test_timeoutClosesWithBoundedMidpointApproximation() public {
+        uint128 maxInput = uint128(type(int128).max);
+        uint128 minimum = maxInput - 1;
+        _place(true, maxInput, minimum);
+        _place(false, maxInput, minimum);
+
+        vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
+        hook.closeBatch(1);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
+    }
+
     function _assertParking(bool zeroForOne) internal {
         Currency input = zeroForOne ? currency0 : currency1;
         uint256 claimsBefore = poolManager.balanceOf(address(hook), input.toId());
