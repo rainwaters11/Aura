@@ -424,67 +424,19 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         return true;
     }
 
-    /// @dev Returns the deterministic best uint128-bounded rational nearest the exact
-    /// midpoint, restricted to the frozen feasible interval.
+    /// @dev Canonical uint128-bounded fallback for an oversized exact midpoint.
+    /// A unit price is the least-complex neutral price whenever it is feasible;
+    /// otherwise the normalized lower endpoint is deterministic and feasible.
     function _bestBoundedMidpoint(
-        uint256 targetNum,
-        uint256 targetDen,
+        uint256,
+        uint256,
         uint256 lowerNum,
         uint256 lowerDen,
         uint256 upperNum,
         uint256 upperDen
     ) internal pure returns (uint256 priceNum, uint256 priceDen) {
-        (priceNum, priceDen) = _bestBoundedRational(targetNum, targetDen, type(uint128).max);
-
-        if (_withinInterval(priceNum, priceDen, lowerNum, lowerDen, upperNum, upperDen)) {
-            return (priceNum, priceDen);
-        }
-
-        // The exact target is the midpoint. If the globally closest bounded fraction
-        // is outside the closed interval, the closest feasible endpoint is canonical.
-        if (_isCloserToTarget(lowerNum, lowerDen, upperNum, upperDen, targetNum, targetDen)) {
-            return (lowerNum, lowerDen);
-        }
-        return (upperNum, upperDen);
-    }
-
-    /// @dev Continued-fraction best approximation subject to independent numerator and
-    /// denominator caps. On equal error, choose the smaller rational, then its
-    /// lexicographically smaller normalized tuple.
-    function _bestBoundedRational(uint256 targetNum, uint256 targetDen, uint256 bound)
-        internal
-        pure
-        returns (uint256 numerator, uint256 denominator)
-    {
-        uint256 referenceNum = targetNum;
-        uint256 referenceDen = targetDen;
-        uint256 prevPrevNum;
-        uint256 prevPrevDen = 1;
-        uint256 prevNum = 1;
-        uint256 prevDen;
-
-        while (targetDen != 0) {
-            uint256 quotient = targetNum / targetDen;
-            uint256 step = quotient;
-
-            if (prevNum != 0) step = _min(step, (bound - prevPrevNum) / prevNum);
-            if (prevDen != 0) step = _min(step, (bound - prevPrevDen) / prevDen);
-
-            if (step != quotient) {
-                uint256 candidateNum = prevPrevNum + step * prevNum;
-                uint256 candidateDen = prevPrevDen + step * prevDen;
-                if (_isCloserToTarget(candidateNum, candidateDen, prevNum, prevDen, referenceNum, referenceDen)) {
-                    return (candidateNum, candidateDen);
-                }
-                return (prevNum, prevDen);
-            }
-
-            (prevPrevNum, prevNum) = (prevNum, prevPrevNum + quotient * prevNum);
-            (prevPrevDen, prevDen) = (prevDen, prevPrevDen + quotient * prevDen);
-            (targetNum, targetDen) = (targetDen, targetNum % targetDen);
-        }
-
-        return (prevNum, prevDen);
+        if (_withinInterval(1, 1, lowerNum, lowerDen, upperNum, upperDen)) return (1, 1);
+        return (lowerNum, lowerDen);
     }
 
     function _withinInterval(
@@ -496,94 +448,6 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         uint256 upperDen
     ) internal pure returns (bool) {
         return numerator * lowerDen >= lowerNum * denominator && numerator * upperDen <= upperNum * denominator;
-    }
-
-    function _isCloserToTarget(
-        uint256 firstNum,
-        uint256 firstDen,
-        uint256 secondNum,
-        uint256 secondDen,
-        uint256 targetNum,
-        uint256 targetDen
-    ) internal pure returns (bool) {
-        int8 comparison = _compareErrors(firstNum, firstDen, secondNum, secondDen, targetNum, targetDen);
-        if (comparison != 0) return comparison < 0;
-
-        uint256 firstScaled = firstNum * secondDen;
-        uint256 secondScaled = secondNum * firstDen;
-        if (firstScaled != secondScaled) return firstScaled < secondScaled;
-        if (firstNum != secondNum) return firstNum < secondNum;
-        return firstDen < secondDen;
-    }
-
-    function _compareErrors(
-        uint256 firstNum,
-        uint256 firstDen,
-        uint256 secondNum,
-        uint256 secondDen,
-        uint256 targetNum,
-        uint256 targetDen
-    ) internal pure returns (int8) {
-        Uint768 memory first = _scaledError(firstNum, firstDen, targetNum, targetDen, secondDen);
-        Uint768 memory second = _scaledError(secondNum, secondDen, targetNum, targetDen, firstDen);
-        if (first.top != second.top) return first.top < second.top ? int8(-1) : int8(1);
-        if (first.middle != second.middle) return first.middle < second.middle ? int8(-1) : int8(1);
-        if (first.bottom != second.bottom) return first.bottom < second.bottom ? int8(-1) : int8(1);
-        return 0;
-    }
-
-    function _scaledError(
-        uint256 numerator,
-        uint256 denominator,
-        uint256 targetNum,
-        uint256 targetDen,
-        uint256 otherDenominator
-    ) internal pure returns (Uint768 memory value) {
-        (uint256 errorHigh, uint256 errorLow) = _absProductDifference(numerator, targetDen, targetNum, denominator);
-        (value.top, value.middle, value.bottom) = _mul512ByUint128(errorHigh, errorLow, otherDenominator);
-    }
-
-    function _absProductDifference(uint256 leftA, uint256 leftB, uint256 rightA, uint256 rightB)
-        internal
-        pure
-        returns (uint256 high, uint256 low)
-    {
-        (uint256 leftHigh, uint256 leftLow) = _mul512(leftA, leftB);
-        (uint256 rightHigh, uint256 rightLow) = _mul512(rightA, rightB);
-
-        if (leftHigh > rightHigh || (leftHigh == rightHigh && leftLow >= rightLow)) {
-            high = leftHigh - rightHigh;
-            low = leftLow - rightLow;
-            if (leftLow < rightLow) --high;
-        } else {
-            high = rightHigh - leftHigh;
-            low = rightLow - leftLow;
-            if (rightLow < leftLow) --high;
-        }
-    }
-
-    function _mul512ByUint128(uint256 high, uint256 low, uint256 factor)
-        internal
-        pure
-        returns (uint256 top, uint256 middle, uint256 bottom)
-    {
-        (uint256 lowHigh, uint256 lowLow) = _mul512(low, factor);
-        (uint256 highHigh, uint256 highLow) = _mul512(high, factor);
-        bottom = lowLow;
-        middle = lowHigh + highLow;
-        top = highHigh + (middle < lowHigh ? 1 : 0);
-    }
-
-    function _mul512(uint256 a, uint256 b) internal pure returns (uint256 high, uint256 low) {
-        assembly ("memory-safe") {
-            let mm := mulmod(a, b, not(0))
-            low := mul(a, b)
-            high := sub(sub(mm, low), lt(mm, low))
-        }
-    }
-
-    function _min(uint256 a, uint256 b) internal pure returns (uint256) {
-        return a < b ? a : b;
     }
 
     function _gcd(uint256 a, uint256 b) internal pure returns (uint256) {
