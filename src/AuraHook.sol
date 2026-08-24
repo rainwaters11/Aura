@@ -9,6 +9,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 import {IAuraRouter} from "./interfaces/IAuraRouter.sol";
 import {AuraOrderData, ParkedOrder, OrderStatus, BatchStatus} from "./types/AuraTypes.sol";
@@ -52,6 +53,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     bytes32 private _refundOrderId;
 
     error InvalidRouter();
+    error InvalidPoolManager();
     error UnauthorizedRouter();
     error InvalidPool();
     error ExactOutputUnsupported();
@@ -125,6 +127,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         int24 tickSpacing
     ) BaseHook(manager) {
         if (address(router) == address(0)) revert InvalidRouter();
+        if (address(router.poolManager()) != address(manager)) revert InvalidPoolManager();
         auraRouter = router;
         _currency0 = currency0;
         _currency1 = currency1;
@@ -353,12 +356,51 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         (bool hasZeroForOne, bool hasOneForZero) = _directions(batchId);
         if (!hasZeroForOne || !hasOneForZero) return false;
 
+        uint256 lowerNum;
+        uint256 lowerDen = 1;
+        uint256 upperNum;
+        uint256 upperDen;
         uint256 refundBoundary = block.timestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS;
         bytes32[] storage ids = _batchOrderIds[batchId];
+
         for (uint256 i; i < ids.length; ++i) {
-            if (uint256(orders[ids[i]].deadline) < refundBoundary) return false;
+            ParkedOrder storage order = orders[ids[i]];
+            if (uint256(order.deadline) < refundBoundary) return false;
+
+            if (order.zeroForOne) {
+                if (lowerNum * order.amountIn < uint256(order.minAmountOut) * lowerDen) {
+                    (lowerNum, lowerDen) = (order.minAmountOut, order.amountIn);
+                }
+            } else if (upperDen == 0 || upperNum * order.minAmountOut > uint256(order.amountIn) * upperDen) {
+                (upperNum, upperDen) = (order.amountIn, order.minAmountOut);
+            }
+        }
+
+        if (lowerNum == 0 || upperDen == 0) return false;
+        uint256 priceNum = lowerNum * upperDen + upperNum * lowerDen;
+        uint256 priceDen = 2 * lowerDen * upperDen;
+        uint256 divisor = _gcd(priceNum, priceDen);
+        priceNum /= divisor;
+        priceDen /= divisor;
+        if (priceNum == 0 || priceDen == 0 || priceNum > type(uint128).max || priceDen > type(uint128).max) {
+            return false;
+        }
+
+        for (uint256 i; i < ids.length; ++i) {
+            ParkedOrder storage order = orders[ids[i]];
+            uint256 payout = order.zeroForOne
+                ? FullMath.mulDiv(order.amountIn, priceNum, priceDen)
+                : FullMath.mulDiv(order.amountIn, priceDen, priceNum);
+            if (payout < order.minAmountOut || payout > uint256(uint128(type(int128).max))) return false;
         }
         return true;
+    }
+
+    function _gcd(uint256 a, uint256 b) internal pure returns (uint256) {
+        while (b != 0) {
+            (a, b) = (b, a % b);
+        }
+        return a;
     }
 
     function _closeReadyBatch(uint64 batchId) internal {

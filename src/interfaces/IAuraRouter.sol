@@ -2,11 +2,14 @@
 pragma solidity ^0.8.30;
 
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 /// @title IAuraRouter
 /// @notice The sole user-facing entrypoint for authenticated Aura exact-input orders.
 interface IAuraRouter {
+    function poolManager() external view returns (IPoolManager);
+
     function auraPoolId() external view returns (PoolId);
 
     function nextNonce(address owner) external view returns (uint64);

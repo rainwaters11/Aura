@@ -29,7 +29,7 @@ contract AuraRouter is IAuraRouter, IUnlockCallback {
     uint64 public constant MIN_ORDER_LIFETIME_SECONDS = 13 hours;
 
     /// @notice PoolManager used for all router unlocks.
-    IPoolManager public immutable poolManager;
+    IPoolManager public immutable override poolManager;
 
     /// @notice Immutable identifier for the only pool this router can access.
     PoolId public immutable auraPoolId;
