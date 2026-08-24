@@ -28,6 +28,12 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     uint64 public constant SETTLEMENT_GRACE_SECONDS = 5 minutes;
     uint64 public constant MIN_ORDER_LIFETIME_SECONDS = 13 hours;
 
+    struct Uint768 {
+        uint256 top;
+        uint256 middle;
+        uint256 bottom;
+    }
+
     bytes32 public constant ORDER_TYPEHASH = keccak256(
         "AuraOrder(uint256 chainId,address auraHook,bytes32 poolId,address owner,address recipient,uint64 nonce,uint64 deadline,bool zeroForOne,uint128 amountIn,uint128 minAmountOut)"
     );
@@ -500,25 +506,42 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         uint256 targetNum,
         uint256 targetDen
     ) internal pure returns (bool) {
-        (uint256 firstErrorHigh, uint256 firstErrorLow) =
-            _absProductDifference(firstNum, targetDen, targetNum, firstDen);
-        (uint256 secondErrorHigh, uint256 secondErrorLow) =
-            _absProductDifference(secondNum, targetDen, targetNum, secondDen);
-
-        (uint256 firstHigh, uint256 firstMiddle, uint256 firstLow) =
-            _mul512ByUint128(firstErrorHigh, firstErrorLow, secondDen);
-        (uint256 secondHigh, uint256 secondMiddle, uint256 secondLow) =
-            _mul512ByUint128(secondErrorHigh, secondErrorLow, firstDen);
-
-        if (firstHigh != secondHigh) return firstHigh < secondHigh;
-        if (firstMiddle != secondMiddle) return firstMiddle < secondMiddle;
-        if (firstLow != secondLow) return firstLow < secondLow;
+        int8 comparison = _compareErrors(firstNum, firstDen, secondNum, secondDen, targetNum, targetDen);
+        if (comparison != 0) return comparison < 0;
 
         uint256 firstScaled = firstNum * secondDen;
         uint256 secondScaled = secondNum * firstDen;
         if (firstScaled != secondScaled) return firstScaled < secondScaled;
         if (firstNum != secondNum) return firstNum < secondNum;
         return firstDen < secondDen;
+    }
+
+    function _compareErrors(
+        uint256 firstNum,
+        uint256 firstDen,
+        uint256 secondNum,
+        uint256 secondDen,
+        uint256 targetNum,
+        uint256 targetDen
+    ) internal pure returns (int8) {
+        Uint768 memory first = _scaledError(firstNum, firstDen, targetNum, targetDen, secondDen);
+        Uint768 memory second = _scaledError(secondNum, secondDen, targetNum, targetDen, firstDen);
+        if (first.top != second.top) return first.top < second.top ? int8(-1) : int8(1);
+        if (first.middle != second.middle) return first.middle < second.middle ? int8(-1) : int8(1);
+        if (first.bottom != second.bottom) return first.bottom < second.bottom ? int8(-1) : int8(1);
+        return 0;
+    }
+
+    function _scaledError(
+        uint256 numerator,
+        uint256 denominator,
+        uint256 targetNum,
+        uint256 targetDen,
+        uint256 otherDenominator
+    ) internal pure returns (Uint768 memory value) {
+        (uint256 errorHigh, uint256 errorLow) =
+            _absProductDifference(numerator, targetDen, targetNum, denominator);
+        (value.top, value.middle, value.bottom) = _mul512ByUint128(errorHigh, errorLow, otherDenominator);
     }
 
     function _absProductDifference(uint256 leftA, uint256 leftB, uint256 rightA, uint256 rightB)
