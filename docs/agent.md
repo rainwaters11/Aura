@@ -247,7 +247,18 @@ $$
 
 where `L = l_n/l_d` is the greatest lower bound and `U = u_n/u_d` is the least upper bound. Both exist for a closable two-sided batch. Compute and GCD-reduce the midpoint with checked full-precision integer arithmetic. Token decimal normalization remains outside settlement math because the price convention uses raw token units.
 
-If the reduced midpoint does not fit two nonzero `uint128` values, generate exactly one deterministic continued-fraction/Stern--Brocot best bounded-rational approximation constrained to the closed feasible interval. Rank by absolute error from the exact midpoint, then smaller numeric rational, then lexicographically smaller normalized numerator and denominator. `AuraHook` and the builder recompute and require this exact tuple. `BatchClosed.referenceSqrtPriceX96` is telemetry only; the closer, fourth-order submitter, a temporary pool-price movement, builder, and publisher cannot select the clearing price. If the canonical tuple is not fundable against finalized pool state, the builder publishes nothing and the batch eventually refunds.
+If the reduced midpoint fits two nonzero `uint128` values, use that reduced midpoint. Otherwise apply the same deployable bounded fallback as `AuraHook`: select normalized `1/1` when it lies in the closed feasible interval; if it does not, select the normalized greatest lower bound `L`. Apply this rule before payout validation. `AuraHook` and the builder recompute and require this exact tuple. `BatchClosed.referenceSqrtPriceX96` is telemetry only; the closer, fourth-order submitter, a temporary pool-price movement, builder, and publisher cannot select the clearing price. If the canonical tuple is not fundable against finalized pool state, the builder publishes nothing and the batch eventually refunds.
+
+Canonical builder and destination vectors use `M = type(int128).max` and `H = (M - 1) / 2`:
+
+| Frozen feasible interval | Exact midpoint encoding | Canonical tuple |
+| --- | --- | --- |
+| `[1/2, 3/2]` | fits | `1/1` |
+| `[(M-1)/M, M/(M-1)]` | oversized | `1/1` |
+| `[1/M, M/1]` | oversized | `1/1` |
+| `[(M-2)/H, M/(H-1)]` | oversized and excludes `1/1` | `(M-2)/H` |
+
+The TypeScript builder fixtures and Solidity parity tests must assert these normalized tuples exactly; a decimal approximation, unreduced equivalent, or prior continued-fraction candidate is invalid.
 
 ### Step 4: calculate uniform payouts
 
@@ -303,7 +314,7 @@ If the agent cannot derive a safe bound, it suppresses dispatch. It never substi
 
 ReactVM cannot access authoritative RPC state, liquidity, fee configuration, tick bitmaps, or initialized tick data. It therefore performs no residual quote. After finalized `BatchClosed` evidence, the production `AuraSolutionBuilder` reads slot0, active liquidity, LP and protocol fees, the tick bitmap, and every initialized tick crossed by the candidate through the configured Unichain Sepolia RPC and pinned v4 state-view interfaces.
 
-For the sole destination-verifiable midpoint candidate, the builder runs integer-identical pinned v4 swap math for the exact-input residual and proposed price limit. An RPC price estimate or decimal approximation is insufficient. It applies the realized-conservation equations in `docs/design.md` and rejects the proposal when that canonical price is underfunded; it never substitutes pool spot state or searches away from the frozen-order midpoint for another feasible price. The builder records the source block number and hash, re-reads that block immediately before inbox submission, and abandons the proposal if the finalized pool state changed.
+For the sole destination-verifiable canonical candidate, the builder runs integer-identical pinned v4 swap math for the exact-input residual and proposed price limit. An RPC price estimate or decimal approximation is insufficient. It applies the realized-conservation equations in `docs/design.md` and rejects the proposal when that canonical price is underfunded; it never substitutes pool spot state or searches away from the hook-derived canonical candidate for another feasible price. The builder records the source block number and hash, re-reads that block immediately before inbox submission, and abandons the proposal if the finalized pool state changed.
 
 `AuraSolutionInbox` emits the exact bounded solution, and ReactVM only verifies and transports it. `AuraHook` remains authoritative: it recomputes order math, executes against current PoolManager state, measures the actual `BalanceDelta`, and atomically reverts stale or underfunded execution. If the builder cannot obtain complete state or find a funded candidate, it publishes nothing and the refund path remains available.
 
@@ -456,7 +467,7 @@ The Reactive integration is complete only when:
 - subscription tests route only the configured Reactive chain/cron contract/topic into retry and only configured Unichain hook/inbox sources into ingestion; mixed-source logs are rejected before mutation;
 - event-kind-scoped ingestion is idempotent: exact redelivery is ignored, conflicting payload reuse invalidates the batch, and distinct batch-level event topics cannot collide;
 - zero minimums, deadlines shorter than `MIN_ORDER_LIFETIME_SECONDS`, prospectively empty feasible intervals, and per-direction input aggregates above `type(int128).max` are rejected before custody; a one-sided batch reserves its final slot for the missing direction; no `BatchClosed` is emitted when a canonical individual payout is unencodable, while aggregate payout liabilities above the signed limit are conserved in full width and executed through deterministic chunks;
-- the hook and builder derive the same sole canonical price from the frozen feasible-interval midpoint, ignore close-time pool spot telemetry, reject alternate feasible prices, and the builder's fork quote matches pinned v4 execution for both residual directions;
+- the hook and builder derive the same sole canonical price from the frozen feasible-interval midpoint plus the oversized bounded fallback, pass every canonical vector above, ignore close-time pool spot telemetry, reject alternate feasible prices, and the builder's fork quote matches pinned v4 execution for both residual directions;
 - unauthorized inbox publication and altered inbox payloads are rejected;
 - the dispatcher produces the same canonical envelope as the builder and Solidity math without quoting pool state;
 - the callback reserves the first address for RVM injection;
