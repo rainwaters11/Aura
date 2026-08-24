@@ -28,12 +28,6 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     uint64 public constant SETTLEMENT_GRACE_SECONDS = 5 minutes;
     uint64 public constant MIN_ORDER_LIFETIME_SECONDS = 13 hours;
 
-    struct Uint768 {
-        uint256 top;
-        uint256 middle;
-        uint256 bottom;
-    }
-
     bytes32 public constant ORDER_TYPEHASH = keccak256(
         "AuraOrder(uint256 chainId,address auraHook,bytes32 poolId,address owner,address recipient,uint64 nonce,uint64 deadline,bool zeroForOne,uint128 amountIn,uint128 minAmountOut)"
     );
@@ -370,7 +364,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         if (priceNum == 0 || priceDen == 0) return false;
 
         if (priceNum > type(uint128).max || priceDen > type(uint128).max) {
-            (priceNum, priceDen) = _bestBoundedMidpoint(priceNum, priceDen, lowerNum, lowerDen, upperNum, upperDen);
+            (priceNum, priceDen) = _boundedMidpointFallback(priceNum, priceDen, lowerNum, lowerDen, upperNum, upperDen);
             if (priceNum == 0 || priceDen == 0) return false;
         }
 
@@ -427,7 +421,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     /// @dev Canonical uint128-bounded fallback for an oversized exact midpoint.
     /// A unit price is the least-complex neutral price whenever it is feasible;
     /// otherwise the normalized lower endpoint is deterministic and feasible.
-    function _bestBoundedMidpoint(
+    function _boundedMidpointFallback(
         uint256,
         uint256,
         uint256 lowerNum,
