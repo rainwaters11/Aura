@@ -48,7 +48,7 @@ Target: Aura MVP on Unichain Sepolia
 - Reserve the final slot of a one-sided batch for the missing direction by rejecting another present-direction order at `MAX_BATCH_ORDERS - 1`.
 - Before custody, require `deadline >= block.timestamp + MIN_ORDER_LIFETIME_SECONDS`, with the normative minimum fixed at 13 hours, and reject an incoming order that would make a prospective two-sided feasible interval empty.
 - Before closure, recompute the feasible interval and require every order deadline to cover `closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`. A preflight-valid two-sided timeout closure alone enters `CLOSED` and emits `BatchClosed`; a one-sided or failed-preflight timeout closure enters `REFUNDABLE` immediately, emits no `BatchClosed`, and never reaches solver dispatch.
-- Derive exactly one canonical rational price from the exact midpoint of the frozen orders' feasible interval. Treat `BatchClosed.referenceSqrtPriceX96` as telemetry only and require the hook to reject every alternative feasible price.
+- Derive exactly one canonical rational price from the exact midpoint of the frozen orders' feasible interval. When that reduced midpoint exceeds the `uint128` tuple bounds, select normalized `1/1` if feasible, otherwise normalized `L`, before validating payouts. Treat `BatchClosed.referenceSqrtPriceX96` as telemetry only and require the hook to reject every alternative feasible price.
 - Before emitting `BatchClosed`, require every canonical individual payout to fit `type(int128).max` and the `uint128[]` schema. Revert an invalid at-cap admission atomically and send an invalid timeout-close batch directly to `REFUNDABLE`.
 - Use full-precision rational math with explicit, tested rounding direction.
 - Update liability and terminal-order state before external unlock operations.
@@ -73,7 +73,7 @@ Target: Aura MVP on Unichain Sepolia
 - Three same-direction orders reserve the final slot; a fourth same-direction order reverts, while a missing-direction order can join and close if preflight-valid.
 - A deadline equal to now or shorter than `MIN_ORDER_LIFETIME_SECONDS` rejects before custody; closure also refuses any batch whose remaining deadlines do not cover finality plus grace.
 - An incompatible incoming limit that would make the prospective two-sided feasible interval empty rejects before custody, while compatible limits preserve a nonempty interval through closure.
-- The hook rejects every funded but noncanonical price; builder and hook derive the identical tuple from the frozen feasible-interval midpoint, and close-time pool manipulation cannot change it.
+- The hook rejects every funded but noncanonical price; builder and hook derive the identical tuple from the frozen feasible-interval midpoint and oversized bounded-fallback vectors, and close-time pool manipulation cannot change it.
 - Canonical individual payouts above `type(int128).max` never enter solver dispatch: at-cap admission reverts atomically and timeout closure becomes directly refundable. Payouts otherwise conserve value within documented rounding dust, including cases whose full-width aggregate payout exceeds the signed limit and is executed in multiple chunks.
 - Zero minimum output, individual signed-range overflow, aggregate input overflow, wrong deadline clock/boundary, duplicate order, wrong pool, wrong batch, and altered payout checks fail safely.
 - A claim request above `type(int128).max` reverts before casting or mutation; a larger accumulated balance is fully redeemable through multiple bounded partial claims.
