@@ -18,6 +18,7 @@ import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 import {AuraHook} from "../src/AuraHook.sol";
 import {AuraRouter} from "../src/AuraRouter.sol";
+import {AuraSettlementVerifier} from "../src/AuraSettlementVerifier.sol";
 import {AuraOrderData, OrderStatus, BatchStatus} from "../src/types/AuraTypes.sol";
 import {BaseTest} from "./utils/BaseTest.sol";
 import {EasyPosm} from "./utils/libraries/EasyPosm.sol";
@@ -34,6 +35,7 @@ abstract contract AuraParkingBase is BaseTest {
 
     AuraHook internal hook;
     AuraRouter internal router;
+    AuraSettlementVerifier internal verifier;
     Currency internal currency0;
     Currency internal currency1;
     PoolKey internal key;
@@ -44,14 +46,17 @@ abstract contract AuraParkingBase is BaseTest {
         deployArtifactsAndLabel();
         (currency0, currency1) = deployCurrencyPair();
 
+        verifier = new AuraSettlementVerifier();
         address predictedRouter = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        bytes memory args = abi.encode(poolManager, predictedRouter, currency0, currency1, uint24(3000), int24(60));
+        bytes memory args = abi.encode(
+            poolManager, predictedRouter, currency0, currency1, uint24(3000), int24(60), verifier, address(this)
+        );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
 
         key = PoolKey(currency0, currency1, 3000, 60, IHooks(mined));
         router = new AuraRouter(poolManager, key);
         assertEq(address(router), predictedRouter);
-        hook = new AuraHook{salt: salt}(poolManager, router, currency0, currency1, 3000, 60);
+        hook = new AuraHook{salt: salt}(poolManager, router, currency0, currency1, 3000, 60, verifier, address(this));
         assertEq(address(hook), mined);
         poolId = key.toId();
 
@@ -248,10 +253,10 @@ contract AuraParkingTest is AuraParkingBase {
         hook.cancelExpiredOrder(orderId);
 
         vm.expectRevert(AuraHook.UnauthorizedUnlockCallback.selector);
-        hook.unlockCallback(abi.encode(orderId));
+        hook.unlockCallback(abi.encode(uint8(1), orderId));
         vm.prank(address(poolManager));
-        vm.expectRevert(AuraHook.InvalidRefundContext.selector);
-        hook.unlockCallback(abi.encode(orderId));
+        vm.expectRevert(AuraHook.InvalidUnlockContext.selector);
+        hook.unlockCallback(abi.encode(uint8(1), orderId));
     }
 
     function test_readyBatchClosesThenBecomesRefundableAfterGrace() public {
