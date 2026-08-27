@@ -59,7 +59,7 @@ Target: Aura MVP on Unichain Sepolia
 - Record a two-sided closure timestamp and delay refunds by the fixed 12-hour finality buffer plus five-minute settlement grace; no operator acknowledgment may extend this bound.
 - Treat `DISPATCHED` as pending and permit at most three byte-identical callback attempts, one minute apart, through the authenticated cron trigger. Track no more than eight pending batches in unique fixed retry slots; each cron tick scans at most eight slots, selects at most one eligible batch, advances a persistent round-robin cursor, and clears terminal slots. A full ring suppresses new dispatch without overwriting pending state, and retries never extend the refund boundary.
 - Deduplicate AuraHook and AuraSolutionInbox logs with an event identity derived from chain, emitting contract, and all topics, storing the data payload hash separately. Ignore only exact redelivery, invalidate conflicting reuse, keep distinct event kinds distinct, and exclude retry-only cron ticks from the ingestion map.
-- Provide one-time permissionless user claims and owner-only timeout refunds.
+- Provide one-time sovereign user claims and permissionless timeout-refund triggering; every refund destination is fixed to the stored order owner.
 - Keep Circle, Arc, Chainalysis, indexers, and frontend services outside the accounting safety path.
 
 ## Required tests
@@ -81,7 +81,7 @@ Target: Aura MVP on Unichain Sepolia
 - A configured Reactive cron log reaches the retry-only branch without passing Unichain hook/inbox checks; wrong chain, cron contract, cron topic, or mixed-source logs fail before mutation. Concurrent `DISPATCHED` batches occupy unique slots in the fixed eight-slot retry ring; each tick performs no more than eight inspections and one callback, advances the cursor fairly, clears terminal slots, never overwrites a full ring, and triggers no more than three identical attempts per batch. A delayed `BatchSettled` makes later retries harmless, and retry state cannot postpone refunds.
 - `BatchClosed`, `BatchSettled`, `OrderCancelled`, and `SolutionProposed` produce distinct event keys even when no order topic exists; exact redelivery is ignored and same-key/different-data reuse invalidates the batch.
 - Unauthorized callback proxy, RVM, cron source, and unlock callers fail.
-- Claims and refunds are CEI-safe and cannot replay.
+- Claims and refunds are non-reentrant, CEI-safe, and cannot replay; a reverting recipient or refund owner can block only that individual operation.
 - Invariant: liabilities plus tracked dust never exceed ERC-6909 holdings for each pool and currency.
 
 ## Review evidence

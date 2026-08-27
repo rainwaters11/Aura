@@ -35,7 +35,7 @@ When two documents disagree, the higher item controls. Ambiguity is a build bloc
 - At most one residual exact-input swap against the Uniswap v4 pool.
 - ERC-6909 custody for parked inputs and settled output claims.
 - Authenticated Reactive Network callback dispatch.
-- User claims and owner-controlled timeout refunds.
+- Sovereign user claims and permissionless timeout-refund triggering with fixed owner destinations.
 
 ### Excluded
 
@@ -510,12 +510,12 @@ block.timestamp > closedAtTimestamp[batchId]
 The 12-hour finality buffer covers the documented OP Stack maximum normal finalized-head lag; the additional five-minute grace begins after that bound and reserves time for inbox publication plus up to three one-minute callback attempts. This conservative on-chain bound is independent of an untrusted builder acknowledgment, so no operator can extend custody by withholding or delaying a finality signal. `CLOSED` wins over refund only for a preflight-valid two-sided batch. A one-sided or failed-preflight timeout closure is already `REFUNDABLE` at the intake boundary; a successfully closed batch becomes refundable only after the fixed finality-plus-grace bound. Once the batch is `REFUNDABLE`:
 
 1. Anyone may mark the batch `REFUNDABLE`.
-2. Only an order owner may call `cancelExpiredOrder(orderId)` for that owner's `PARKED` order.
+2. Anyone may call `cancelExpiredOrder(orderId)` for an eligible `PARKED` order, but the caller cannot choose or redirect the refund recipient.
 3. The hook marks the order `CANCELLED` before unlocking.
-4. The refund callback burns exactly that order's parked input claim and takes the underlying input to the owner.
+4. The refund callback burns exactly that order's parked input claim and takes the underlying input only to the immutable stored owner.
 5. The hook emits `OrderCancelled`.
 
-Refund before the applicable boundary, refund after settlement, double refund, refund to a different recipient, and refund of another user's order revert.
+Refund before the applicable boundary, refund after settlement, double refund, and refund to a different recipient revert. Because each order refunds through its own transaction, a reverting or blacklisted owner can delay only that owner's refund and cannot block another order.
 
 ## 11. Events
 
@@ -584,7 +584,7 @@ The following properties must hold in tests and production:
 7. **Conservation:** settlement closes the PoolManager unlock with zero unresolved currency deltas.
 8. **Uniformity and manipulation resistance:** every executed order uses the same directed rational price and deterministic rounding rule, derived solely from the exact midpoint of frozen order bounds; pool spot state and transaction ordering cannot select it.
 9. **Minimum output:** no order settles below its `minAmountOut`.
-10. **One execution:** an order leaves `PARKED` exactly once, by settlement or cancellation.
+10. **One execution:** an order leaves `PARKED` exactly once, by settlement or permissionlessly triggered cancellation to its stored owner.
 11. **Replay resistance:** a batch and solution hash settle at most once.
 12. **Bounded work:** settlement cannot iterate more than `MAX_BATCH_ORDERS`.
 13. **Callback authentication:** both callback proxy and injected RVM identity must match immutable configuration.

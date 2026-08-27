@@ -217,7 +217,7 @@ contract AuraParkingTest is AuraParkingBase {
         hook.closeBatch(1);
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
 
-        vm.prank(owner);
+        vm.prank(makeAddr("refund-keeper"));
         hook.cancelExpiredOrder(orderId);
         (,,,,,,,, OrderStatus status) = hook.orders(orderId);
         assertEq(uint8(status), uint8(OrderStatus.CANCELLED));
@@ -243,7 +243,7 @@ contract AuraParkingTest is AuraParkingBase {
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
     }
 
-    function test_refundRejectsEarlyWrongOwnerReplayAndDirectCallback() public {
+    function test_refundRejectsEarlyReplayAndDirectCallbackButAllowsPermissionlessTrigger() public {
         _place(true, AMOUNT, MINIMUM);
         bytes32 orderId = hook.batchOrderIds(1)[0];
         vm.prank(owner);
@@ -252,13 +252,9 @@ contract AuraParkingTest is AuraParkingBase {
 
         vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
         hook.closeBatch(1);
-        vm.prank(makeAddr("attacker"));
-        vm.expectRevert(AuraHook.UnauthorizedOrderOwner.selector);
+        vm.prank(makeAddr("refund-keeper"));
         hook.cancelExpiredOrder(orderId);
-
-        vm.prank(owner);
-        hook.cancelExpiredOrder(orderId);
-        vm.prank(owner);
+        vm.prank(makeAddr("replay-keeper"));
         vm.expectRevert(AuraHook.OrderNotParked.selector);
         hook.cancelExpiredOrder(orderId);
 
