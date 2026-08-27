@@ -110,11 +110,7 @@ function initialSnapshot(scenario: ScenarioKind): AuraSnapshot {
       chainId: 31_337,
       connection: "ready",
       before: { price: 2_500, tick: 78_244, liquidity: "1.20M" },
-      after: {
-        price: scenario === "perfect-cow" ? 2_500 : 2_504.2,
-        tick: scenario === "perfect-cow" ? 78_244 : 78_261,
-        liquidity: "1.20M",
-      },
+      after: { price: 2_500, tick: 78_244, liquidity: "1.20M" },
     },
     orders: [],
     settlement: null,
@@ -174,9 +170,13 @@ export function createLocalAuraDataSource(latencyMs = 420): AuraDataSource {
       next.phase = "settled";
       next.orders = next.orders.map((order) => ({
         ...order,
-        status: "CLAIMABLE",
+        status: "SETTLED",
       }));
       next.settlement = settlementFor(snapshot.scenario);
+      next.pool.after =
+        snapshot.scenario === "perfect-cow"
+          ? clone(next.pool.before)
+          : { price: 2_504.2, tick: 78_261, liquidity: "1.20M" };
       next.claims = claimsFor(snapshot.scenario);
       next.evidence.push(
         {
@@ -203,7 +203,10 @@ export function createLocalAuraDataSource(latencyMs = 420): AuraDataSource {
       const claim = next.claims.find((entry) => entry.account === account);
       if (!claim || claim.status !== "available")
         throw new Error("This account has no available output to claim.");
-      if (!recipient.startsWith("0x") || recipient.length !== 42)
+      if (
+        !/^0x[0-9a-fA-F]{40}$/.test(recipient) ||
+        /^0x0{40}$/i.test(recipient)
+      )
         throw new Error("Enter a valid nonzero recipient address.");
       if (recipient.toLowerCase().endsWith("dead")) {
         throw new Error(
@@ -214,9 +217,6 @@ export function createLocalAuraDataSource(latencyMs = 420): AuraDataSource {
       claim.recipient = recipient;
       claim.traceId = "local-claim-a11ce-0001";
       next.phase = "claimed";
-      next.orders = next.orders.map((order) =>
-        order.recipient === account ? { ...order, status: "CLAIMED" } : order,
-      );
       next.evidence.push({
         label: "Claim trace · Alice",
         value: claim.traceId,

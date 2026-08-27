@@ -6,8 +6,7 @@ export type ActionName = "load" | "close" | "settle" | "claim" | "reset";
 
 export type ActionState = "idle" | "pending" | "success" | "error";
 
-export type OrderStatus =
-  "PARKED" | "SETTLED" | "CLAIMABLE" | "CLAIMED" | "REFUNDABLE";
+export type OrderStatus = "PARKED" | "SETTLED" | "REFUNDABLE";
 
 export type EvidenceKind =
   "Local simulation" | "Anvil evidence" | "Unichain Sepolia evidence";

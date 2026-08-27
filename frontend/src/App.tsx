@@ -324,7 +324,7 @@ function PoolProofCard({ snapshot }: { snapshot: AuraSnapshot }) {
 function OrderCard({ order }: { order: ParkedOrder }) {
   const token0 = order.direction === "token0-to-token1";
   const statusTone =
-    order.status === "CLAIMED"
+    order.status === "SETTLED"
       ? "success"
       : order.status === "REFUNDABLE"
         ? "danger"
@@ -376,13 +376,25 @@ function OrderCard({ order }: { order: ParkedOrder }) {
   );
 }
 
-function OrderBoard({ orders }: { orders: ParkedOrder[] }) {
+function OrderBoard({
+  orders,
+  phase,
+}: {
+  orders: ParkedOrder[];
+  phase: DemoPhase;
+}) {
+  const membershipLabel =
+    PHASE_RANK[phase] >= PHASE_RANK.closed
+      ? "Frozen membership"
+      : phase === "parked"
+        ? "Intake open"
+        : "Awaiting orders";
   return (
     <section className="panel order-board" aria-labelledby="orders-title">
       <div className="panel__header">
         <div>
           <div className="section-kicker">
-            <Database size={14} aria-hidden="true" /> Frozen membership
+            <Database size={14} aria-hidden="true" /> {membershipLabel}
           </div>
           <h2 id="orders-title">Parked orders</h2>
         </div>
@@ -627,6 +639,12 @@ function EvidenceDrawer({
   snapshot: AuraSnapshot;
   mode: string;
 }) {
+  const evidenceNotice =
+    mode === "Local simulation"
+      ? "These are reproducible local trace identifiers, not public transaction hashes or Blockscout evidence."
+      : mode === "Anvil evidence"
+        ? "These identifiers come from a local Anvil chain, not a public block explorer."
+        : "This source reports Unichain Sepolia evidence. Verify each identifier against the configured public explorer.";
   return (
     <details className="evidence-drawer panel">
       <summary>
@@ -644,10 +662,7 @@ function EvidenceDrawer({
       <div className="evidence-drawer__body">
         <div className="evidence-notice">
           <AlertCircle size={17} />
-          <span>
-            These are reproducible local trace identifiers, not public
-            transaction hashes or Blockscout evidence.
-          </span>
+          <span>{evidenceNotice}</span>
         </div>
         <dl>
           {snapshot.evidence.map((item) => (
@@ -838,6 +853,7 @@ export default function App({
       .then((value) => {
         if (!active) return;
         setSnapshot(value);
+        setBusy(null);
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -848,6 +864,7 @@ export default function App({
               ? error.message
               : "The local data source could not be loaded.",
         });
+        setBusy(null);
       });
     return () => {
       active = false;
@@ -911,6 +928,8 @@ export default function App({
 
   async function changeScenario(nextScenario: ScenarioKind) {
     if (busy || snapshot?.phase !== "empty") return;
+    setBusy("reset");
+    setSnapshot(null);
     setScenario(nextScenario);
     setNotice(null);
   }
@@ -1093,7 +1112,10 @@ export default function App({
           </div>
         )}
 
-        <OrderBoard orders={displaySnapshot.orders} />
+        <OrderBoard
+          orders={displaySnapshot.orders}
+          phase={displaySnapshot.phase}
+        />
 
         <div className="dashboard-grid dashboard-grid--bottom">
           <SettlementVisual snapshot={displaySnapshot} />

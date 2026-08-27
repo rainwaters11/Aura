@@ -7,6 +7,7 @@ describe("local Aura data source", () => {
     const source = createLocalAuraDataSource(0);
     let snapshot = await source.getInitialSnapshot("residual");
     expect(snapshot.phase).toBe("empty");
+    expect(snapshot.pool.after).toEqual(snapshot.pool.before);
 
     snapshot = await source.parkDemoOrders(snapshot);
     expect(snapshot.orders).toHaveLength(2);
@@ -28,6 +29,11 @@ describe("local Aura data source", () => {
       "available",
       "available",
     ]);
+    expect(snapshot.orders.map((order) => order.status)).toEqual([
+      "SETTLED",
+      "SETTLED",
+    ]);
+    expect(snapshot.pool.after).not.toEqual(snapshot.pool.before);
   });
 
   it("represents a perfect CoW without pool movement", async () => {
@@ -75,8 +81,37 @@ describe("local Aura data source", () => {
       "claimed",
       "available",
     ]);
+    expect(snapshot.orders.map((order) => order.status)).toEqual([
+      "SETTLED",
+      "SETTLED",
+    ]);
     await expect(
       source.claimOutput(snapshot, account, account),
     ).rejects.toThrow("no available output");
+  });
+
+  it("rejects malformed and zero claim recipients", async () => {
+    const source = createLocalAuraDataSource(0);
+    let snapshot = await source.getInitialSnapshot("residual");
+    snapshot = await source.parkDemoOrders(snapshot);
+    snapshot = await source.closeBatch(snapshot);
+    snapshot = await source.settleBatch(snapshot);
+    const account = snapshot.claims[0].account;
+
+    await expect(
+      source.claimOutput(
+        snapshot,
+        account,
+        "0xgggggggggggggggggggggggggggggggggggggggg",
+      ),
+    ).rejects.toThrow("valid nonzero recipient");
+    await expect(
+      source.claimOutput(
+        snapshot,
+        account,
+        "0x0000000000000000000000000000000000000000",
+      ),
+    ).rejects.toThrow("valid nonzero recipient");
+    expect(snapshot.claims[0].status).toBe("available");
   });
 });

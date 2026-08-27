@@ -44,6 +44,7 @@ describe("Aura Settlement Console", () => {
       screen.getByRole("heading", { name: /settle together/i }),
     ).toBeInTheDocument();
     expect(screen.getByText("No orders parked yet")).toBeInTheDocument();
+    expect(screen.getByText("Awaiting orders")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /^close batch/i }),
     ).toBeDisabled();
@@ -76,7 +77,9 @@ describe("Aura Settlement Console", () => {
   it("switches to a perfect CoW fixture and proves no pool movement", async () => {
     const user = await renderReady();
     await user.click(screen.getByRole("button", { name: "Perfect CoW" }));
-    await user.click(screen.getByRole("button", { name: /load demo orders/i }));
+    await user.click(
+      await screen.findByRole("button", { name: /load demo orders/i }),
+    );
     await user.click(
       await screen.findByRole("button", { name: /^close batch/i }),
     );
@@ -128,5 +131,50 @@ describe("Aura Settlement Console", () => {
       "Alice’s claim remains fully available",
     );
     expect(screen.getByRole("button", { name: /claim 4 weth/i })).toBeEnabled();
+  });
+
+  it("labels batch membership according to the actual lifecycle", async () => {
+    const user = await renderReady();
+    await user.click(screen.getByRole("button", { name: /load demo orders/i }));
+    expect(await screen.findByText("Intake open")).toBeInTheDocument();
+    expect(screen.queryByText("Frozen membership")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /close batch/i }));
+    expect(await screen.findByText("Frozen membership")).toBeInTheDocument();
+  });
+
+  it("locks the stale fixture while a scenario reloads", async () => {
+    const user = userEvent.setup();
+    render(
+      <App dataSource={createLocalAuraDataSource(30)} previewMode="normal" />,
+    );
+    await screen.findByRole("button", { name: /load demo orders/i });
+
+    await user.click(screen.getByRole("button", { name: "Perfect CoW" }));
+    expect(
+      screen.queryByRole("button", { name: /load demo orders/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Preparing Aura's deterministic evidence/i),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /load demo orders/i }),
+    ).toBeEnabled();
+  });
+
+  it("describes evidence according to the injected source", async () => {
+    const source = {
+      ...createLocalAuraDataSource(0),
+      mode: "Unichain Sepolia evidence" as const,
+    };
+    render(<App dataSource={source} previewMode="normal" />);
+    await screen.findByRole("button", { name: /load demo orders/i });
+
+    expect(
+      screen.getByText(/This source reports Unichain Sepolia evidence/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/These are reproducible local trace identifiers/i),
+    ).not.toBeInTheDocument();
   });
 });
