@@ -45,3 +45,19 @@ struct ParkedOrder {
     uint128 minAmountOut;
     OrderStatus status;
 }
+
+/// @notice Canonical bounded settlement proposal for one frozen Aura batch.
+/// @dev `solutionHash` commits to every other field and the ordered array hashes,
+///      but is deliberately excluded from its own preimage.
+struct BatchSolution {
+    uint64 batchId;
+    uint64 deadline;
+    uint128 priceNumerator;
+    uint128 priceDenominator;
+    bool residualZeroForOne;
+    uint128 residualAmountIn;
+    uint160 sqrtPriceLimitX96;
+    bytes32 solutionHash;
+    bytes32[] orderIds;
+    uint128[] payouts;
+}
