@@ -11,15 +11,15 @@ import {BeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {IAuraRouter} from "./interfaces/IAuraRouter.sol";
 import {AuraOrderData, ParkedOrder, OrderStatus, BatchStatus, BatchSolution, ClaimData} from "./types/AuraTypes.sol";
 import {IAuraSettlementVerifier} from "./interfaces/IAuraSettlementVerifier.sol";
 
 /// @title AuraHook
-/// @notice Authenticated, bounded exact-input order parking for one Aura pool.
-/// @dev Settlement and redemption deliberately remain outside this Sprint 1 contract.
-contract AuraHook is BaseAsyncSwap, IUnlockCallback {
+/// @notice Authenticated parking, bounded settlement, sovereign claims, and timeout refunds for one Aura pool.
+contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
 
@@ -109,7 +109,6 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     error BatchClosurePreflightFailed();
     error TwoSidedBatch();
     error OrderNotParked();
-    error UnauthorizedOrderOwner();
     error UnauthorizedUnlockCallback();
     error InvalidRefundContext();
     error BatchIdOverflow();
@@ -228,9 +227,11 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     }
 
     /// @notice Redeems a bounded portion of the caller's settled output balance.
-    function claimTokens(PoolId poolId, Currency token, address recipient, uint256 amount) external {
+    function claimTokens(PoolId poolId, Currency token, address recipient, uint256 amount) external nonReentrant {
         if (
             PoolId.unwrap(poolId) != PoolId.unwrap(auraPoolId) || recipient == address(0) || amount == 0
+                || (Currency.unwrap(token) != Currency.unwrap(_currency0)
+                    && Currency.unwrap(token) != Currency.unwrap(_currency1))
                 || amount > uint256(uint128(type(int128).max)) || _unlockAction != UnlockAction.NONE
         ) revert InvalidClaim();
         uint256 balance = claimableBalances[poolId][msg.sender][token];
@@ -281,11 +282,11 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         }
     }
 
-    /// @notice Cancels one caller-owned parked order after its batch becomes refundable.
-    function cancelExpiredOrder(bytes32 orderId) external {
+    /// @notice Permissionlessly refunds one parked order after its batch becomes refundable.
+    /// @dev The caller cannot choose the destination; the underlying input always returns to the stored owner.
+    function cancelExpiredOrder(bytes32 orderId) external nonReentrant {
         ParkedOrder storage order = orders[orderId];
         if (order.status != OrderStatus.PARKED) revert OrderNotParked();
-        if (order.owner != msg.sender) revert UnauthorizedOrderOwner();
         if (batchStatus[order.batchId] != BatchStatus.REFUNDABLE) revert BatchNotRefundable();
 
         order.status = OrderStatus.CANCELLED;
