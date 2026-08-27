@@ -82,6 +82,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     error UnauthorizedSettlement();
     error InvalidRvmIdentity();
     error BatchNotClosed();
+    error SettlementWindowExpired();
     error InvalidUnlockContext();
     error InvalidResidualSwap();
     error UnderfundedSettlement();
@@ -203,6 +204,10 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         if (msg.sender != reactiveCallbackProxy) revert UnauthorizedSettlement();
         if (rvmId != expectedRvmId) revert InvalidRvmIdentity();
         if (batchStatus[solution.batchId] != BatchStatus.CLOSED) revert BatchNotClosed();
+        if (
+            block.timestamp
+                > uint256(closedAtTimestamp[solution.batchId]) + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS
+        ) revert SettlementWindowExpired();
         if (_unlockAction != UnlockAction.NONE) revert InvalidUnlockContext();
         if (settlementVerifier.validate(solution) != IAuraSettlementVerifier.validate.selector) {
             revert InvalidSettlementVerifier();

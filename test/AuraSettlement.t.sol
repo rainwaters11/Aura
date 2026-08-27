@@ -76,6 +76,43 @@ contract AuraSettlementTest is AuraParkingBase {
         hook.settleBatch(address(this), solution);
     }
 
+    function test_settlementWindowBoundaryIsStrict() public {
+        BatchSolution memory solution = _closedSolution(10 ether, 10 ether, 10 ether, 10 ether);
+        uint256 refundBoundary =
+            uint256(hook.closedAtTimestamp(1)) + hook.MAX_FINALITY_LAG_SECONDS() + hook.SETTLEMENT_GRACE_SECONDS();
+
+        vm.warp(refundBoundary);
+        hook.settleBatch(address(this), solution);
+
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.SETTLED));
+    }
+
+    function test_rejectsSettlementAfterRefundBoundaryWithoutStatusAdvance() public {
+        BatchSolution memory solution = _closedSolution(10 ether, 10 ether, 10 ether, 10 ether);
+        bytes32[] memory ids = hook.batchOrderIds(1);
+        uint256 inputClaim0 = poolManager.balanceOf(address(hook), currency0.toId());
+        uint256 inputClaim1 = poolManager.balanceOf(address(hook), currency1.toId());
+        uint256 refundBoundary =
+            uint256(hook.closedAtTimestamp(1)) + hook.MAX_FINALITY_LAG_SECONDS() + hook.SETTLEMENT_GRACE_SECONDS();
+
+        vm.warp(refundBoundary + 1);
+        vm.expectRevert(AuraHook.SettlementWindowExpired.selector);
+        hook.settleBatch(address(this), solution);
+
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
+        assertFalse(hook.usedSolutions(solution.solutionHash));
+        assertEq(hook.claimableBalances(poolId, owner, currency0), 0);
+        assertEq(hook.claimableBalances(poolId, owner, currency1), 0);
+        assertEq(poolManager.balanceOf(address(hook), currency0.toId()), inputClaim0);
+        assertEq(poolManager.balanceOf(address(hook), currency1.toId()), inputClaim1);
+        for (uint256 i; i < ids.length; ++i) {
+            assertEq(uint8(_stored(ids[i]).status), uint8(OrderStatus.PARKED));
+        }
+
+        hook.closeBatch(1);
+        assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.REFUNDABLE));
+    }
+
     function test_recipientCanRedeemSettledOutputAndCannotReplay() public {
         BatchSolution memory solution = _closedSolution(10 ether, 10 ether, 10 ether, 10 ether);
         hook.settleBatch(address(this), solution);
