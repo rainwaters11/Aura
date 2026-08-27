@@ -836,6 +836,8 @@ export default function App({
   const [scenario, setScenario] = useState<ScenarioKind>("residual");
   const [snapshot, setSnapshot] = useState<AuraSnapshot | null>(null);
   const [busy, setBusy] = useState<ActionName | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [notice, setNotice] = useState<{
     tone: "success" | "error";
     message: string;
@@ -848,6 +850,7 @@ export default function App({
       return () => {
         active = false;
       };
+    setLoadError(null);
     dataSource
       .getInitialSnapshot(scenario)
       .then((value) => {
@@ -857,19 +860,17 @@ export default function App({
       })
       .catch((error: unknown) => {
         if (!active) return;
-        setNotice({
-          tone: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The local data source could not be loaded.",
-        });
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : "The evidence source could not be loaded.",
+        );
         setBusy(null);
       });
     return () => {
       active = false;
     };
-  }, [dataSource, preview, scenario]);
+  }, [dataSource, preview, reloadToken, scenario]);
 
   useEffect(() => {
     const claim = snapshot?.claims[0];
@@ -930,11 +931,17 @@ export default function App({
     if (busy || snapshot?.phase !== "empty") return;
     setBusy("reset");
     setSnapshot(null);
+    setLoadError(null);
     setScenario(nextScenario);
     setNotice(null);
   }
 
   if (!displaySnapshot) {
+    const retryLoad = () => {
+      setLoadError(null);
+      setBusy("reset");
+      setReloadToken((value) => value + 1);
+    };
     return (
       <main className="loading-screen">
         <AuraMark />
@@ -947,6 +954,19 @@ export default function App({
               fallback. No assets are affected.
             </p>
           </div>
+        ) : loadError ? (
+          <div className="loading-error" role="alert">
+            <XCircle size={24} />
+            <strong>Evidence source could not be loaded</strong>
+            <p>{loadError} No local state or custody was changed.</p>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={retryLoad}
+            >
+              <RefreshCw size={15} /> Retry evidence source
+            </button>
+          </div>
         ) : (
           <>
             <span className="loading-ring" />
@@ -958,6 +978,27 @@ export default function App({
   }
 
   const result = displaySnapshot.settlement;
+  const environment =
+    dataSource.mode === "Local simulation"
+      ? {
+          network: "Deterministic fixture",
+          wallet: "Demo wallet ready",
+          footer:
+            "Local evidence only · No public transaction was signed or broadcast.",
+        }
+      : dataSource.mode === "Anvil evidence"
+        ? {
+            network: "Local Anvil",
+            wallet: "Anvil adapter ready",
+            footer:
+              "Local Anvil evidence · No public transaction was broadcast.",
+          }
+        : {
+            network: "Unichain Sepolia",
+            wallet: "Read-only evidence",
+            footer:
+              "Public testnet evidence · Verify identifiers before relying on them.",
+          };
   const phaseLabel =
     displaySnapshot.phase === "empty"
       ? "Ready to begin"
@@ -980,17 +1021,17 @@ export default function App({
         </a>
         <nav aria-label="Environment status">
           <StatusPill tone="gold">
-            <Activity size={12} /> Local simulation
+            <Activity size={12} /> {dataSource.mode}
           </StatusPill>
           <span className="network-label">
-            <span /> Deterministic fixture
+            <span /> {environment.network}
           </span>
           <button
             type="button"
             className="wallet-status"
-            aria-label="Local demo wallet ready"
+            aria-label={environment.wallet}
           >
-            <WalletCards size={16} /> Demo wallet ready
+            <WalletCards size={16} /> {environment.wallet}
           </button>
         </nav>
       </header>
@@ -1139,9 +1180,7 @@ export default function App({
             <small>One pool. One price. One residual.</small>
           </span>
         </div>
-        <p>
-          Local evidence only · No public transaction was signed or broadcast.
-        </p>
+        <p>{environment.footer}</p>
         <span>Issue #13 · Commit 4198d1e</span>
       </footer>
     </div>

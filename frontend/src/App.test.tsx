@@ -6,7 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 import { createLocalAuraDataSource } from "./data/localAuraDataSource";
@@ -174,7 +174,45 @@ describe("Aura Settlement Console", () => {
       screen.getByText(/This source reports Unichain Sepolia evidence/i),
     ).toBeInTheDocument();
     expect(
+      screen.getAllByText("Unichain Sepolia evidence").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("button", { name: "Read-only evidence" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Public testnet evidence · Verify identifiers/i),
+    ).toBeInTheDocument();
+    expect(
       screen.queryByText(/These are reproducible local trace identifiers/i),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Local evidence only/i)).not.toBeInTheDocument();
+  });
+
+  it("surfaces scenario reload failures and recovers on retry", async () => {
+    const source = createLocalAuraDataSource(0);
+    const residual = await source.getInitialSnapshot("residual");
+    const perfectCow = await source.getInitialSnapshot("perfect-cow");
+    const getInitialSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(residual)
+      .mockRejectedValueOnce(new Error("The fixture adapter is offline."))
+      .mockResolvedValueOnce(perfectCow);
+    const recoverableSource = { ...source, getInitialSnapshot };
+    const user = userEvent.setup();
+    render(<App dataSource={recoverableSource} previewMode="normal" />);
+    await screen.findByRole("button", { name: /load demo orders/i });
+
+    await user.click(screen.getByRole("button", { name: "Perfect CoW" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The fixture adapter is offline",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /retry evidence source/i }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /load demo orders/i }),
+    ).toBeEnabled();
+    expect(getInitialSnapshot).toHaveBeenCalledTimes(3);
   });
 });
