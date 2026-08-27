@@ -61,3 +61,12 @@ struct BatchSolution {
     bytes32[] orderIds;
     uint128[] payouts;
 }
+
+/// @notice Canonical account-scoped redemption request for settled output claims.
+struct ClaimData {
+    bytes32 poolId;
+    address account;
+    address recipient;
+    address currency;
+    uint128 amount;
+}

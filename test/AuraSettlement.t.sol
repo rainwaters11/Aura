@@ -7,6 +7,7 @@ import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientSta
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
+import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 
 import {AuraHook} from "../src/AuraHook.sol";
 import {AuraClearingMath} from "../src/libraries/AuraClearingMath.sol";
@@ -24,7 +25,7 @@ contract AuraSettlementTest is AuraParkingBase {
         (uint160 sqrtBefore, int24 tickBefore,,) = poolManager.getSlot0(poolId);
         uint128 liquidityBefore = poolManager.getLiquidity(poolId);
 
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
 
         (uint160 sqrtAfter, int24 tickAfter,,) = poolManager.getSlot0(poolId);
         assertEq(sqrtAfter, sqrtBefore);
@@ -43,7 +44,7 @@ contract AuraSettlementTest is AuraParkingBase {
         BatchSolution memory solution = _closedSolution(12 ether, 6 ether, 3 ether, 6 ether);
         assertTrue(solution.residualZeroForOne);
         assertGt(solution.residualAmountIn, 0);
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
         _assertSettledAndBacked(solution);
         assertGt(hook.protocolDust(poolId, currency1), 0);
     }
@@ -52,7 +53,7 @@ contract AuraSettlementTest is AuraParkingBase {
         BatchSolution memory solution = _closedSolution(3 ether, 6 ether, 12 ether, 6 ether);
         assertFalse(solution.residualZeroForOne);
         assertGt(solution.residualAmountIn, 0);
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
         _assertSettledAndBacked(solution);
         assertGt(hook.protocolDust(poolId, currency0), 0);
     }
@@ -61,15 +62,46 @@ contract AuraSettlementTest is AuraParkingBase {
         BatchSolution memory solution = _closedSolution(10 ether, 10 ether, 10 ether, 10 ether);
         vm.prank(makeAddr("not-authority"));
         vm.expectRevert(AuraHook.UnauthorizedSettlement.selector);
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
+
+        vm.expectRevert(AuraHook.InvalidRvmIdentity.selector);
+        hook.settleBatch(makeAddr("wrong-rvm"), solution);
 
         vm.prank(address(poolManager));
         vm.expectRevert(AuraHook.InvalidUnlockContext.selector);
         hook.unlockCallback(abi.encode(uint8(2), solution));
 
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
         vm.expectRevert(AuraHook.BatchNotClosed.selector);
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
+    }
+
+    function test_recipientCanRedeemSettledOutputAndCannotReplay() public {
+        BatchSolution memory solution = _closedSolution(10 ether, 10 ether, 10 ether, 10 ether);
+        hook.settleBatch(address(this), solution);
+        uint256 beforeBalance = MockERC20(Currency.unwrap(currency0)).balanceOf(owner);
+
+        vm.prank(owner);
+        hook.claimTokens(poolId, currency0, owner, 10 ether);
+
+        assertEq(hook.claimableBalances(poolId, owner, currency0), 0);
+        assertEq(MockERC20(Currency.unwrap(currency0)).balanceOf(owner), beforeBalance + 10 ether);
+        assertEq(poolManager.balanceOf(address(hook), currency0.toId()), 0);
+        vm.prank(owner);
+        vm.expectRevert(AuraHook.InsufficientClaimBalance.selector);
+        hook.claimTokens(poolId, currency0, owner, 1);
+    }
+
+    function test_claimRejectsWrongPoolRecipientRangeAndDirectCallback() public {
+        vm.expectRevert(AuraHook.InvalidClaim.selector);
+        hook.claimTokens(PoolId.wrap(bytes32(uint256(1))), currency0, owner, 1);
+        vm.expectRevert(AuraHook.InvalidClaim.selector);
+        hook.claimTokens(poolId, currency0, address(0), 1);
+        vm.expectRevert(AuraHook.InvalidClaim.selector);
+        hook.claimTokens(poolId, currency0, owner, uint256(uint128(type(int128).max)) + 1);
+        vm.prank(address(poolManager));
+        vm.expectRevert(AuraHook.InvalidUnlockContext.selector);
+        hook.unlockCallback(abi.encode(uint8(3), bytes32(0)));
     }
 
     function test_malformedExecutionPlanRevertsAtomically() public {
@@ -80,7 +112,7 @@ contract AuraSettlementTest is AuraParkingBase {
         uint256 claim0 = poolManager.balanceOf(address(hook), currency0.toId());
 
         vm.expectRevert(abi.encodeWithSelector(AuraClearingMath.PayoutMismatch.selector, 0));
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
 
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
         assertFalse(hook.usedSolutions(solution.solutionHash));
@@ -98,20 +130,20 @@ contract AuraSettlementTest is AuraParkingBase {
         altered.residualZeroForOne = false;
         altered.solutionHash = AuraClearingMath.computeSolutionHash(altered, _domain());
         vm.expectRevert(AuraClearingMath.ResidualMismatch.selector);
-        hook.settleBatch(altered);
+        hook.settleBatch(address(this), altered);
 
         altered.residualZeroForOne = true;
         altered.residualAmountIn = canonicalAmount;
         altered.residualAmountIn += 1;
         altered.solutionHash = AuraClearingMath.computeSolutionHash(altered, _domain());
         vm.expectRevert(AuraClearingMath.ResidualMismatch.selector);
-        hook.settleBatch(altered);
+        hook.settleBatch(address(this), altered);
 
         altered.residualAmountIn = canonicalAmount;
         altered.solutionHash = AuraClearingMath.computeSolutionHash(altered, _domain());
         altered.sqrtPriceLimitX96 += 1;
         vm.expectRevert(AuraClearingMath.InvalidSolutionHash.selector);
-        hook.settleBatch(altered);
+        hook.settleBatch(address(this), altered);
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
     }
 
@@ -122,7 +154,7 @@ contract AuraSettlementTest is AuraParkingBase {
         uint256 inputClaim1 = poolManager.balanceOf(address(hook), currency1.toId());
 
         vm.expectRevert(AuraHook.UnderfundedSettlement.selector);
-        hook.settleBatch(solution);
+        hook.settleBatch(address(this), solution);
 
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
         assertFalse(hook.usedSolutions(solution.solutionHash));

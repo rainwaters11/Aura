@@ -49,14 +49,24 @@ abstract contract AuraParkingBase is BaseTest {
         verifier = new AuraSettlementVerifier();
         address predictedRouter = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
         bytes memory args = abi.encode(
-            poolManager, predictedRouter, currency0, currency1, uint24(3000), int24(60), verifier, address(this)
+            poolManager,
+            predictedRouter,
+            currency0,
+            currency1,
+            uint24(3000),
+            int24(60),
+            verifier,
+            address(this),
+            address(this)
         );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
 
         key = PoolKey(currency0, currency1, 3000, 60, IHooks(mined));
         router = new AuraRouter(poolManager, key);
         assertEq(address(router), predictedRouter);
-        hook = new AuraHook{salt: salt}(poolManager, router, currency0, currency1, 3000, 60, verifier, address(this));
+        hook = new AuraHook{salt: salt}(
+            poolManager, router, currency0, currency1, 3000, 60, verifier, address(this), address(this)
+        );
         assertEq(address(hook), mined);
         poolId = key.toId();
 

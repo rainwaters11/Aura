@@ -13,7 +13,7 @@ import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockC
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 import {IAuraRouter} from "./interfaces/IAuraRouter.sol";
-import {AuraOrderData, ParkedOrder, OrderStatus, BatchStatus, BatchSolution} from "./types/AuraTypes.sol";
+import {AuraOrderData, ParkedOrder, OrderStatus, BatchStatus, BatchSolution, ClaimData} from "./types/AuraTypes.sol";
 import {IAuraSettlementVerifier} from "./interfaces/IAuraSettlementVerifier.sol";
 
 /// @title AuraHook
@@ -36,7 +36,8 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
 
     IAuraRouter public immutable auraRouter;
     IAuraSettlementVerifier public immutable settlementVerifier;
-    address private immutable _settlementAuthority;
+    address public immutable reactiveCallbackProxy;
+    address public immutable expectedRvmId;
     PoolId public immutable auraPoolId;
     Currency private immutable _currency0;
     Currency private immutable _currency1;
@@ -62,7 +63,8 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     enum UnlockAction {
         NONE,
         REFUND,
-        SETTLE_BATCH
+        SETTLE_BATCH,
+        CLAIM
     }
 
     UnlockAction private _unlockAction;
@@ -71,17 +73,21 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
     bool private _residualZeroForOne;
     uint128 private _residualAmountIn;
     uint160 private _residualPriceLimit;
+    bytes32 private _claimContextHash;
 
     error InvalidRouter();
     error InvalidPoolManager();
     error InvalidSettlementVerifier();
     error InvalidSettlementAuthority();
     error UnauthorizedSettlement();
+    error InvalidRvmIdentity();
     error BatchNotClosed();
     error InvalidUnlockContext();
     error InvalidResidualSwap();
     error UnderfundedSettlement();
     error SettlementOrderInvalid();
+    error InvalidClaim();
+    error InsufficientClaimBalance();
     error UnauthorizedRouter();
     error InvalidPool();
     error ExactOutputUnsupported();
@@ -138,6 +144,9 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         bool residualZeroForOne,
         uint128 residualAmountIn
     );
+    event TokensClaimed(
+        bytes32 indexed poolId, address indexed account, address indexed recipient, Currency token, uint256 amount
+    );
 
     struct Admission {
         uint64 batchId;
@@ -169,17 +178,19 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         uint24 fee,
         int24 tickSpacing,
         IAuraSettlementVerifier verifier,
-        address authority
+        address callbackProxy,
+        address rvmId
     ) BaseHook(manager) {
         if (address(router) == address(0)) revert InvalidRouter();
         if (address(router.poolManager()) != address(manager)) revert InvalidPoolManager();
         if (address(verifier) == address(0) || address(verifier).code.length == 0) {
             revert InvalidSettlementVerifier();
         }
-        if (authority == address(0)) revert InvalidSettlementAuthority();
+        if (callbackProxy == address(0) || rvmId == address(0)) revert InvalidSettlementAuthority();
         auraRouter = router;
         settlementVerifier = verifier;
-        _settlementAuthority = authority;
+        reactiveCallbackProxy = callbackProxy;
+        expectedRvmId = rvmId;
         _currency0 = currency0;
         _currency1 = currency1;
         _fee = fee;
@@ -188,8 +199,9 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         if (PoolId.unwrap(router.auraPoolId()) != PoolId.unwrap(auraPoolId)) revert InvalidPool();
     }
 
-    function settleBatch(BatchSolution calldata solution) external {
-        if (msg.sender != _settlementAuthority) revert UnauthorizedSettlement();
+    function settleBatch(address rvmId, BatchSolution calldata solution) external {
+        if (msg.sender != reactiveCallbackProxy) revert UnauthorizedSettlement();
+        if (rvmId != expectedRvmId) revert InvalidRvmIdentity();
         if (batchStatus[solution.batchId] != BatchStatus.CLOSED) revert BatchNotClosed();
         if (_unlockAction != UnlockAction.NONE) revert InvalidUnlockContext();
         if (settlementVerifier.validate(solution) != IAuraSettlementVerifier.validate.selector) {
@@ -208,6 +220,31 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
         _residualAmountIn = 0;
         _residualPriceLimit = 0;
         _unlockAction = UnlockAction.NONE;
+    }
+
+    /// @notice Redeems a bounded portion of the caller's settled output balance.
+    function claimTokens(PoolId poolId, Currency token, address recipient, uint256 amount) external {
+        if (
+            PoolId.unwrap(poolId) != PoolId.unwrap(auraPoolId) || recipient == address(0) || amount == 0
+                || amount > uint256(uint128(type(int128).max)) || _unlockAction != UnlockAction.NONE
+        ) revert InvalidClaim();
+        uint256 balance = claimableBalances[poolId][msg.sender][token];
+        if (amount > balance) revert InsufficientClaimBalance();
+        ClaimData memory claim = ClaimData({
+            poolId: PoolId.unwrap(poolId),
+            account: msg.sender,
+            recipient: recipient,
+            currency: Currency.unwrap(token),
+            amount: uint128(amount)
+        });
+
+        claimableBalances[poolId][msg.sender][token] = balance - amount;
+        _unlockAction = UnlockAction.CLAIM;
+        _claimContextHash = keccak256(abi.encode(claim));
+        poolManager.unlock(abi.encode(UnlockAction.CLAIM, claim));
+        _claimContextHash = bytes32(0);
+        _unlockAction = UnlockAction.NONE;
+        emit TokensClaimed(PoolId.unwrap(poolId), msg.sender, recipient, token, amount);
     }
 
     function batchOrderIds(uint64 batchId) external view returns (bytes32[] memory) {
@@ -267,6 +304,14 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback {
             (, BatchSolution memory solution) = abi.decode(rawData, (UnlockAction, BatchSolution));
             if (solution.solutionHash != _residualSolutionHash) revert InvalidUnlockContext();
             _executeSettlement(solution);
+            return "";
+        }
+        if (action == UnlockAction.CLAIM) {
+            (, ClaimData memory claim) = abi.decode(rawData, (UnlockAction, ClaimData));
+            if (keccak256(abi.encode(claim)) != _claimContextHash) revert InvalidUnlockContext();
+            Currency claimToken = Currency.wrap(claim.currency);
+            poolManager.burn(address(this), claimToken.toId(), claim.amount);
+            poolManager.take(claimToken, claim.recipient, claim.amount);
             return "";
         }
         (, bytes32 orderId) = abi.decode(rawData, (UnlockAction, bytes32));

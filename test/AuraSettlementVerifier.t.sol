@@ -127,14 +127,22 @@ contract AuraSettlementVerifierTest is AuraParkingBase {
     function _assertInvalidVerifier(IAuraSettlementVerifier invalidVerifier) private {
         address predictedRouter = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
         bytes memory args = abi.encode(
-            poolManager, predictedRouter, currency0, currency1, uint24(3000), int24(60), invalidVerifier, address(this)
+            poolManager,
+            predictedRouter,
+            currency0,
+            currency1,
+            uint24(3000),
+            int24(60),
+            invalidVerifier,
+            address(this),
+            address(this)
         );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
         AuraRouter otherRouter = new AuraRouter(poolManager, PoolKey(currency0, currency1, 3000, 60, IHooks(mined)));
         assertEq(address(otherRouter), predictedRouter);
         vm.expectRevert(AuraHook.InvalidSettlementVerifier.selector);
         new AuraHook{salt: salt}(
-            poolManager, otherRouter, currency0, currency1, 3000, 60, invalidVerifier, address(this)
+            poolManager, otherRouter, currency0, currency1, 3000, 60, invalidVerifier, address(this), address(this)
         );
     }
 
