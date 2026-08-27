@@ -92,6 +92,28 @@ contract AuraSettlementTest is AuraParkingBase {
         hook.claimTokens(poolId, currency0, owner, 1);
     }
 
+    function test_backingIncludesLiabilitiesForNonOwnerRecipients() public {
+        address recipient0 = makeAddr("settlement-recipient-0");
+        address recipient1 = makeAddr("settlement-recipient-1");
+        BatchSolution memory solution =
+            _closedSolutionForRecipients(10 ether, 10 ether, 10 ether, 10 ether, recipient0, recipient1);
+
+        hook.settleBatch(address(this), solution);
+
+        assertEq(hook.claimableBalances(poolId, owner, currency0), 0);
+        assertEq(hook.claimableBalances(poolId, owner, currency1), 0);
+        assertEq(hook.claimableBalances(poolId, recipient0, currency1), solution.payouts[0]);
+        assertEq(hook.claimableBalances(poolId, recipient1, currency0), solution.payouts[1]);
+        assertLe(
+            hook.claimableBalances(poolId, recipient1, currency0) + hook.protocolDust(poolId, currency0),
+            poolManager.balanceOf(address(hook), currency0.toId())
+        );
+        assertLe(
+            hook.claimableBalances(poolId, recipient0, currency1) + hook.protocolDust(poolId, currency1),
+            poolManager.balanceOf(address(hook), currency1.toId())
+        );
+    }
+
     function test_claimRejectsWrongPoolRecipientRangeAndDirectCallback() public {
         vm.expectRevert(AuraHook.InvalidClaim.selector);
         hook.claimTokens(PoolId.wrap(bytes32(uint256(1))), currency0, owner, 1);
@@ -180,11 +202,22 @@ contract AuraSettlementTest is AuraParkingBase {
     }
 
     function _closedSolution(uint128 amount0, uint128 minimum1, uint128 amount1, uint128 minimum0)
-        private
+        internal
         returns (BatchSolution memory solution)
     {
-        _place(true, amount0, minimum1);
-        _place(false, amount1, minimum0);
+        return _closedSolutionForRecipients(amount0, minimum1, amount1, minimum0, owner, owner);
+    }
+
+    function _closedSolutionForRecipients(
+        uint128 amount0,
+        uint128 minimum1,
+        uint128 amount1,
+        uint128 minimum0,
+        address recipient0,
+        address recipient1
+    ) internal returns (BatchSolution memory solution) {
+        _placeForRecipient(true, amount0, minimum1, recipient0);
+        _placeForRecipient(false, amount1, minimum0, recipient1);
         vm.roll(uint256(hook.openedAtBlock(1)) + hook.MAX_BATCH_WINDOW() + 1);
         hook.closeBatch(1);
         assertEq(uint8(hook.batchStatus(1)), uint8(BatchStatus.CLOSED));
@@ -212,6 +245,12 @@ contract AuraSettlementTest is AuraParkingBase {
         solution.solutionHash = AuraClearingMath.computeSolutionHash(solution, _domain());
     }
 
+    function _placeForRecipient(bool zeroForOne, uint128 amount, uint128 minimum, address recipient) internal {
+        uint64 deadline = uint64(block.timestamp + router.MIN_ORDER_LIFETIME_SECONDS());
+        vm.prank(owner);
+        router.placeOrder(zeroForOne, amount, minimum, recipient, deadline);
+    }
+
     function _stored(bytes32 id) private view returns (ParkedOrder memory order) {
         return IAuraSettlementSource(address(hook)).orders(id);
     }
@@ -222,10 +261,55 @@ contract AuraSettlementTest is AuraParkingBase {
 }
 
 contract AuraSettlementInvariant is AuraSettlementTest {
+    uint256 internal constant MAX_TRACKED_RECIPIENTS = 8;
+
+    address[MAX_TRACKED_RECIPIENTS] internal trackedRecipients;
+    uint256 internal trackedRecipientCount;
+
+    function setUp() public override {
+        super.setUp();
+        _trackRecipient(owner);
+
+        bytes4[] memory selectors = new bytes4[](1);
+        selectors[0] = this.settleWithAlternateRecipients.selector;
+        targetContract(address(this));
+        targetSelector(FuzzSelector({addr: address(this), selectors: selectors}));
+    }
+
+    function settleWithAlternateRecipients() public {
+        if (hook.batchStatus(1) != BatchStatus.NONE) return;
+
+        address recipient0 = makeAddr("invariant-recipient-0");
+        address recipient1 = makeAddr("invariant-recipient-1");
+        _trackRecipient(recipient0);
+        _trackRecipient(recipient1);
+
+        BatchSolution memory solution =
+            _closedSolutionForRecipients(10 ether, 10 ether, 10 ether, 10 ether, recipient0, recipient1);
+        hook.settleBatch(address(this), solution);
+    }
+
     function invariant_liabilitiesAndDustNeverExceedClaims() public view {
-        uint256 liability0 = hook.claimableBalances(poolId, owner, currency0) + hook.protocolDust(poolId, currency0);
-        uint256 liability1 = hook.claimableBalances(poolId, owner, currency1) + hook.protocolDust(poolId, currency1);
+        uint256 liability0;
+        uint256 liability1;
+        for (uint256 i; i < trackedRecipientCount; ++i) {
+            address recipient = trackedRecipients[i];
+            liability0 += hook.claimableBalances(poolId, recipient, currency0);
+            liability1 += hook.claimableBalances(poolId, recipient, currency1);
+        }
+        liability0 += hook.protocolDust(poolId, currency0);
+        liability1 += hook.protocolDust(poolId, currency1);
+
         assertLe(liability0, poolManager.balanceOf(address(hook), currency0.toId()));
         assertLe(liability1, poolManager.balanceOf(address(hook), currency1.toId()));
+    }
+
+    function _trackRecipient(address recipient) internal {
+        for (uint256 i; i < trackedRecipientCount; ++i) {
+            if (trackedRecipients[i] == recipient) return;
+        }
+        assertLt(trackedRecipientCount, MAX_TRACKED_RECIPIENTS);
+        trackedRecipients[trackedRecipientCount] = recipient;
+        ++trackedRecipientCount;
     }
 }
