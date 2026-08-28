@@ -15,6 +15,11 @@ describe("local Aura data source", () => {
       "token0-to-token1",
       "token1-to-token0",
     ]);
+    expect(snapshot.batchWindow).toEqual({
+      openedAtBlock: 1_000_000,
+      currentBlock: 1_000_021,
+      maxWindowBlocks: 20,
+    });
 
     snapshot = await source.closeBatch(snapshot);
     snapshot = await source.settleBatch(snapshot);
@@ -34,6 +39,36 @@ describe("local Aura data source", () => {
       "SETTLED",
     ]);
     expect(snapshot.pool.after).not.toEqual(snapshot.pool.before);
+  });
+
+  it("uses exactly the AuraHook permission bits in the hook fixture", async () => {
+    const source = createLocalAuraDataSource(0);
+    const snapshot = await source.getInitialSnapshot("residual");
+    const allHookMask = (1n << 14n) - 1n;
+    const beforeSwapFlag = 1n << 7n;
+    const beforeSwapReturnsDeltaFlag = 1n << 3n;
+
+    expect(BigInt(snapshot.pool.hookAddress) & allHookMask).toBe(
+      beforeSwapFlag | beforeSwapReturnsDeltaFlag,
+    );
+  });
+
+  it("enforces the strict batch-window close boundary", async () => {
+    const source = createLocalAuraDataSource(0);
+    let snapshot = await source.getInitialSnapshot("residual");
+    snapshot = await source.parkDemoOrders(snapshot);
+    snapshot.batchWindow!.currentBlock =
+      snapshot.batchWindow!.openedAtBlock +
+      snapshot.batchWindow!.maxWindowBlocks;
+
+    await expect(source.closeBatch(snapshot)).rejects.toThrow(
+      "20-block intake window is still active",
+    );
+    expect(snapshot.phase).toBe("parked");
+
+    snapshot.batchWindow!.currentBlock += 1;
+    const closed = await source.closeBatch(snapshot);
+    expect(closed.phase).toBe("closed");
   });
 
   it("represents a perfect CoW without pool movement", async () => {
