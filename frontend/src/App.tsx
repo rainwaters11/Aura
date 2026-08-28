@@ -716,6 +716,16 @@ function ActionConsole({
   changeScenario: (scenario: ScenarioKind) => void;
 }) {
   const phase = snapshot.phase;
+  const batchWindow = snapshot.batchWindow;
+  const elapsedBlocks = batchWindow
+    ? batchWindow.currentBlock - batchWindow.openedAtBlock
+    : 0;
+  const firstEligibleBlock = batchWindow
+    ? batchWindow.openedAtBlock + batchWindow.maxWindowBlocks + 1
+    : 0;
+  const closeEligible = Boolean(
+    batchWindow && batchWindow.currentBlock >= firstEligibleBlock,
+  );
   const actions: Array<{
     name: ActionName;
     label: string;
@@ -733,9 +743,11 @@ function ActionConsole({
     {
       name: "close",
       label: "Close batch",
-      helper: "Freeze membership and price",
+      helper: closeEligible
+        ? `${elapsedBlocks} blocks elapsed · closure eligible`
+        : "Waiting for the strict intake boundary",
       icon: LockKeyhole,
-      enabled: phase === "parked",
+      enabled: phase === "parked" && closeEligible,
     },
     {
       name: "settle",
@@ -773,6 +785,24 @@ function ActionConsole({
           </button>
         </div>
       </div>
+      {batchWindow && phase === "parked" ? (
+        <div className="batch-window-proof" role="status" aria-live="polite">
+          <span className="batch-window-proof__icon" aria-hidden="true">
+            <Clock3 size={17} />
+          </span>
+          <span>
+            <small>Deterministic intake window</small>
+            <strong>{elapsedBlocks} local blocks elapsed</strong>
+          </span>
+          <span className="batch-window-proof__blocks">
+            Opened {batchWindow.openedAtBlock.toLocaleString()} · closure
+            eligible at block {firstEligibleBlock.toLocaleString()}
+          </span>
+          <StatusPill tone={closeEligible ? "success" : "gold"}>
+            {closeEligible ? "Boundary passed" : "Window active"}
+          </StatusPill>
+        </div>
+      ) : null}
       <div className="action-list">
         {actions.map((action, index) => {
           const Icon = action.icon;
