@@ -10,7 +10,8 @@ are block-explorer transaction hashes.
 The console presents one deliberate path:
 
 1. Park the two exact-input orders.
-2. Close the batch and freeze its membership.
+2. Show the deterministic 20-block intake window has passed, then close the
+   batch and freeze its membership.
 3. Submit the approved local settlement fixture.
 4. Inspect direct-match volume, the single residual, curve movement, and zero
    unresolved deltas.
