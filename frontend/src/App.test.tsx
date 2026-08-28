@@ -137,6 +137,12 @@ describe("Aura Settlement Console", () => {
     const user = await renderReady();
     await user.click(screen.getByRole("button", { name: /load demo orders/i }));
     expect(await screen.findByText("Intake open")).toBeInTheDocument();
+    expect(screen.getByText("21 local blocks elapsed")).toBeInTheDocument();
+    expect(
+      screen.getByText(/closure eligible at block 1,000,021/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Boundary passed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /close batch/i })).toBeEnabled();
     expect(screen.queryByText("Frozen membership")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /close batch/i }));
