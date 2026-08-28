@@ -10,11 +10,14 @@ import type {
 const COMMIT_SHA = "4198d1ed5dcd44fc42b7384e31dabaa399d79722";
 const localHash = (prefix: string) => `0x${prefix.padEnd(64, "0")}`;
 const POOL_ID = localHash("a013c0a5");
-const HOOK_ADDRESS = "0x00000000000000000000000000000000000a0130";
+const HOOK_ADDRESS = "0x00000000000000000000000000000000000a0088";
 const ALICE = "0x00000000000000000000000000000000000a11ce";
 const BOB = "0x0000000000000000000000000000000000000b0b";
 const ALICE_RECIPIENT = "0x0000000000000000000000000000000000a11ce1";
 const BOB_RECIPIENT = "0x00000000000000000000000000000000000b0b02";
+const MAX_BATCH_WINDOW = 20;
+const DEMO_OPENED_AT_BLOCK = 1_000_000;
+const DEMO_CURRENT_BLOCK = DEMO_OPENED_AT_BLOCK + MAX_BATCH_WINDOW + 1;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -112,6 +115,7 @@ function initialSnapshot(scenario: ScenarioKind): AuraSnapshot {
       before: { price: 2_500, tick: 78_244, liquidity: "1.20M" },
       after: { price: 2_500, tick: 78_244, liquidity: "1.20M" },
     },
+    batchWindow: null,
     orders: [],
     settlement: null,
     claims: [],
@@ -139,6 +143,11 @@ export function createLocalAuraDataSource(latencyMs = 420): AuraDataSource {
       const next = clone(snapshot);
       next.phase = "parked";
       next.orders = ordersFor(snapshot.scenario);
+      next.batchWindow = {
+        openedAtBlock: DEMO_OPENED_AT_BLOCK,
+        currentBlock: DEMO_CURRENT_BLOCK,
+        maxWindowBlocks: MAX_BATCH_WINDOW,
+      };
       next.evidence.push(
         {
           label: "Order trace · Alice",
@@ -150,16 +159,33 @@ export function createLocalAuraDataSource(latencyMs = 420): AuraDataSource {
           value: "local-order-b0b-0002",
           kind: "Local simulation",
         },
+        {
+          label: "Batch intake window",
+          value: `opened ${DEMO_OPENED_AT_BLOCK} · current ${DEMO_CURRENT_BLOCK} · ${MAX_BATCH_WINDOW + 1} blocks elapsed`,
+          kind: "Local simulation",
+        },
       );
       return next;
     },
     async closeBatch(snapshot) {
       await pause();
+      if (snapshot.phase !== "parked" || !snapshot.batchWindow) {
+        throw new Error(
+          "Park the deterministic orders before closing the batch.",
+        );
+      }
+      const { openedAtBlock, currentBlock, maxWindowBlocks } =
+        snapshot.batchWindow;
+      if (currentBlock <= openedAtBlock + maxWindowBlocks) {
+        throw new Error(
+          `The ${maxWindowBlocks}-block intake window is still active. Advance beyond block ${openedAtBlock + maxWindowBlocks} before closing.`,
+        );
+      }
       const next = clone(snapshot);
       next.phase = "closed";
       next.evidence.push({
         label: "Batch closure",
-        value: "local-batch-0001-closed",
+        value: `local-batch-0001-closed-at-${currentBlock}`,
         kind: "Local simulation",
       });
       return next;

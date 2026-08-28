@@ -776,6 +776,43 @@ main {
 .scenario-toggle button:disabled {
   opacity: 0.55;
 }
+.batch-window-proof {
+  margin-top: 18px;
+  padding: 12px 13px;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid rgba(73, 229, 154, 0.15);
+  border-radius: 14px;
+  background: rgba(73, 229, 154, 0.035);
+}
+.batch-window-proof__icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--emerald);
+  background: rgba(73, 229, 154, 0.08);
+}
+.batch-window-proof > span:nth-child(2) {
+  display: grid;
+  gap: 2px;
+}
+.batch-window-proof small,
+.batch-window-proof__blocks {
+  color: var(--muted);
+  font-size: 9px;
+}
+.batch-window-proof strong {
+  color: var(--cream);
+  font-size: 11px;
+}
+.batch-window-proof__blocks {
+  justify-self: end;
+  text-align: right;
+}
 .action-list {
   margin-top: 21px;
   display: grid;
@@ -1568,6 +1605,14 @@ footer > span {
   }
   .scenario-toggle button {
     flex: 1;
+  }
+  .batch-window-proof {
+    grid-template-columns: auto 1fr auto;
+  }
+  .batch-window-proof__blocks {
+    grid-column: 2 / -1;
+    justify-self: start;
+    text-align: left;
   }
   .proof-grid,
   .order-grid,

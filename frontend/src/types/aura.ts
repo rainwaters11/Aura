@@ -78,10 +78,17 @@ export interface EvidenceRecord {
   kind: EvidenceKind;
 }
 
+export interface BatchWindow {
+  openedAtBlock: number;
+  currentBlock: number;
+  maxWindowBlocks: number;
+}
+
 export interface AuraSnapshot {
   scenario: ScenarioKind;
   phase: DemoPhase;
   pool: PoolProof;
+  batchWindow: BatchWindow | null;
   orders: ParkedOrder[];
   settlement: SettlementResult | null;
   claims: ClaimRecord[];
