@@ -45,6 +45,7 @@ import type {
   AuraDataSource,
   AuraSnapshot,
   DemoPhase,
+  EvidenceKind,
   ParkedOrder,
   ScenarioKind,
 } from "./types/aura";
@@ -221,10 +222,31 @@ function StageRail({ phase }: { phase: DemoPhase }) {
   );
 }
 
-function PoolProofCard({ snapshot }: { snapshot: AuraSnapshot }) {
+function PoolProofCard({
+  snapshot,
+  mode,
+}: {
+  snapshot: AuraSnapshot;
+  mode: EvidenceKind;
+}) {
   const { pool, phase, settlement } = snapshot;
   const settled = PHASE_RANK[phase] >= PHASE_RANK.settled;
   const neutral = settled && !settlement?.poolMoved;
+  const sourceCopy =
+    mode === "Local simulation"
+      ? {
+          ready: "Local source ready",
+          proof: "Verified by deterministic local accounting evidence.",
+        }
+      : mode === "Anvil evidence"
+        ? {
+            ready: "Anvil source ready",
+            proof: "Verified by local Anvil execution evidence.",
+          }
+        : {
+            ready: "Sepolia source ready",
+            proof: "Verified by Unichain Sepolia execution evidence.",
+          };
   return (
     <section className="panel pool-proof" aria-labelledby="pool-proof-title">
       <div className="panel__header">
@@ -236,7 +258,7 @@ function PoolProofCard({ snapshot }: { snapshot: AuraSnapshot }) {
         </div>
         <StatusPill tone={pool.connection === "ready" ? "success" : "danger"}>
           {pool.connection === "ready"
-            ? "Local source ready"
+            ? sourceCopy.ready
             : pool.connection.replace("-", " ")}
         </StatusPill>
       </div>
@@ -312,7 +334,7 @@ function PoolProofCard({ snapshot }: { snapshot: AuraSnapshot }) {
           </strong>
           <span>
             {settled
-              ? "Verified by deterministic local accounting evidence."
+              ? sourceCopy.proof
               : "Complete the batch journey to compare pool state."}
           </span>
         </div>
@@ -1128,7 +1150,7 @@ export default function App({
         <StageRail phase={displaySnapshot.phase} />
 
         <div className="dashboard-grid dashboard-grid--top">
-          <PoolProofCard snapshot={displaySnapshot} />
+          <PoolProofCard snapshot={displaySnapshot} mode={dataSource.mode} />
           <ActionConsole
             snapshot={displaySnapshot}
             busy={busy}

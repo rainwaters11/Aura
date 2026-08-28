@@ -179,6 +179,7 @@ describe("Aura Settlement Console", () => {
     expect(
       screen.getByRole("button", { name: "Read-only evidence" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Sepolia source ready")).toBeInTheDocument();
     expect(
       screen.getByText(/Public testnet evidence · Verify identifiers/i),
     ).toBeInTheDocument();
@@ -186,6 +187,19 @@ describe("Aura Settlement Console", () => {
       screen.queryByText(/These are reproducible local trace identifiers/i),
     ).not.toBeInTheDocument();
     expect(screen.queryByText(/Local evidence only/i)).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /load demo orders/i }));
+    await user.click(screen.getByRole("button", { name: /close batch/i }));
+    await user.click(screen.getByRole("button", { name: /submit solution/i }));
+    expect(
+      await screen.findByText(
+        "Verified by Unichain Sepolia execution evidence.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/deterministic local accounting evidence/i),
+    ).not.toBeInTheDocument();
   });
 
   it("surfaces scenario reload failures and recovers on retry", async () => {
