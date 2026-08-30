@@ -46,7 +46,7 @@ commit above.
 | --- | --- |
 | `forge fmt --check` | Pass |
 | `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes |
-| `forge test -vvv` | Exact-head CI `#79` passed: 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed |
+| `forge test -vvv` | Exact-head CI `#80` passed: 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed |
 | Settlement/accounting invariants | Pass as part of the full suite |
 
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200

@@ -101,7 +101,7 @@ prediction. It is not a generic deterministic-deployment policy.
 - `forge build --sizes --optimize --optimizer-runs 200`: passed. Optimized
   `AuraHook` runtime is 21,716 bytes, 1,284 bytes below the 23,000-byte
   operational ceiling (and 2,860 bytes below EIP-170).
-- Exact-head CI `#79` passed `forge fmt --check`, `forge build --sizes`, and
+- Exact-head CI `#80` passed `forge fmt --check`, `forge build --sizes`, and
   `forge test -vvv`: 204 tests passed, 0 failed, and 8 intentional Reactive fork
   tests skipped (212 total). All 21 deployer tests passed, including focused
   regressions for missing callback-proxy code, code-hash drift, and a zero
