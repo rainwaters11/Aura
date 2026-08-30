@@ -28,6 +28,7 @@ contract DeployAuraTest is Test {
         vm.etch(script.UNICHAIN_SEPOLIA_POOL_MANAGER(), hex"00");
         vm.etch(script.UNICHAIN_SEPOLIA_USDC(), hex"00");
         vm.etch(script.UNICHAIN_SEPOLIA_WETH(), hex"00");
+        vm.etch(CALLBACK_PROXY, hex"00");
         vm.etch(
             script.DETERMINISTIC_DEPLOYMENT_PROXY(),
             hex"7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf3"
@@ -49,6 +50,7 @@ contract DeployAuraTest is Test {
             minedHook: address(0),
             hookSalt: bytes32(0),
             callbackProxy: CALLBACK_PROXY,
+            callbackProxyCodeHash: CALLBACK_PROXY.codehash,
             expectedRvmId: RVM_ID,
             compilerVersion: "0.8.30",
             optimizer: true,
@@ -129,6 +131,29 @@ contract DeployAuraTest is Test {
                 config.create2Factory.codehash
             )
         );
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsCallbackProxyWithoutCode() public {
+        vm.etch(CALLBACK_PROXY, "");
+        vm.expectRevert(abi.encodeWithSelector(DeployAura.MissingCode.selector, CALLBACK_PROXY));
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsCallbackProxyCodeHashMismatch() public {
+        bytes32 unexpectedCodeHash = keccak256("unexpected callback proxy");
+        config.callbackProxyCodeHash = unexpectedCodeHash;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.CodeHashMismatch.selector, CALLBACK_PROXY, unexpectedCodeHash, CALLBACK_PROXY.codehash
+            )
+        );
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsZeroCallbackProxyCodeHash() public {
+        config.callbackProxyCodeHash = bytes32(0);
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.validatePreflight(config);
     }
 
@@ -236,6 +261,7 @@ contract DeployAuraTest is Test {
         vm.setEnv("AURA_MINED_HOOK", vm.toString(c.minedHook));
         vm.setEnv("AURA_HOOK_SALT", vm.toString(c.hookSalt));
         vm.setEnv("AURA_CALLBACK_PROXY", vm.toString(c.callbackProxy));
+        vm.setEnv("AURA_CALLBACK_PROXY_CODEHASH", vm.toString(c.callbackProxyCodeHash));
         vm.setEnv("AURA_EXPECTED_RVM_ID", vm.toString(c.expectedRvmId));
         vm.setEnv("AURA_COMPILER_VERSION", c.compilerVersion);
         vm.setEnv("AURA_OPTIMIZER", c.optimizer ? "true" : "false");

@@ -23,7 +23,10 @@ estimate, or wallet requirement is claimed until that exact tuple is approved.
 The callback proxy is the only caller authorized to invoke settlement, and the
 RVM identity is independently checked inside that call. A wrong or unavailable
 proxy/RVM pair prevents settlement callbacks; users retain the fixed timeout
-refund path. Neither value can be a zero address.
+refund path. Neither value can be a zero address. The operator must approve the
+proxy address and its nonzero runtime code hash as one manifest entry. Preflight
+rejects an EOA, missing proxy deployment, or code-hash mismatch before address
+prediction, hook mining, or deployment simulation.
 
 ## Typed manifest
 
@@ -32,7 +35,8 @@ refund path. Neither value can be a zero address.
 for undecided values, so it cannot be accidentally consumed as a valid manifest.
 The deployer script rejects the wrong chain, canonical-address mismatch, missing
 dependency code, zero authorities, nonce drift, occupied output address,
-noncanonical salt, address mismatch, hook-bit mismatch, or build-setting drift.
+noncanonical salt, address mismatch, hook-bit mismatch, callback-proxy bytecode
+drift, or build-setting drift.
 The pool configuration is immutable and pinned to fee `3000` with tick spacing
 `60`; other nonzero values and incompatible fee/tick-spacing combinations fail
 before hook-address mining or deployment simulation.
@@ -73,7 +77,8 @@ part of address mining. PoolManager and token deployments are required to have
 code; their proxy/implementation governance remains an external dependency.
 
 Values still requiring explicit operator approval are deployer, finalized
-starting nonce, callback proxy, and expected RVM ID. After those are fixed:
+starting nonce, callback proxy address and runtime code hash, and expected RVM
+ID. After those are fixed:
 
 1. verifier is predicted at `CREATE(deployer, startingNonce)`;
 2. router is predicted at `CREATE(deployer, startingNonce + 1)`;
@@ -96,8 +101,10 @@ prediction. It is not a generic deterministic-deployment policy.
 - `forge build --sizes --optimize --optimizer-runs 200`: passed. Optimized
   `AuraHook` runtime is 21,716 bytes, 1,284 bytes below the 23,000-byte
   operational ceiling (and 2,860 bytes below EIP-170).
-- `forge test --optimize --optimizer-runs 200 -vv`: 200 passed, 0 failed, 8
-  existing Reactive fork tests skipped, 208 total. The 18 deployer tests passed.
+- Exact-head Foundry results for the callback-proxy hardening are pending CI.
+  The prior head passed 200 tests with 8 intentional Reactive fork skips; this
+  change adds 3 focused deployer regressions for missing code, code-hash drift,
+  and a zero approved code hash.
 - The required non-broadcast `forge script` command reached configuration load
   and stopped on missing `AURA_CHAIN_ID`, as intended. It did not simulate or
   publish transactions. This is a blocker, not a successful fork simulation.
@@ -154,9 +161,9 @@ Provide and approve exactly:
 
 ```text
 Use deployer <public address> at finalized nonce <nonce>, callback proxy
-<public address>, and expected RVM identity <public address> to mine the Issue 15
-AuraHook address and run an unsigned, non-broadcast Unichain Sepolia fork
-simulation from <exact commit>.
+<public address> with runtime code hash <bytes32>, and expected RVM identity
+<public address> to mine the Issue 15 AuraHook address and run an unsigned,
+non-broadcast Unichain Sepolia fork simulation from <exact commit>.
 ```
 
 That approval authorizes only read-only RPC access and unsigned simulation. It

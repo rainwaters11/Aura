@@ -21,7 +21,8 @@ In particular:
 - no `UNICHAIN_SEPOLIA_RPC` or deployer configuration was present in the
   preflight environment, so the configured endpoint, deployer address, balance,
   nonce, and required wallet balance could not be validated;
-- currencies, fee, tick spacing, callback proxy, expected RVM ID, solution
+- currencies, fee, tick spacing, callback proxy and its runtime code hash,
+  expected RVM ID, solution
   publisher, and state-view addresses have not been committed as an approved
   deployment manifest;
 - the Aura Core deployment package exists on this branch, but its approved
@@ -45,7 +46,7 @@ commit above.
 | --- | --- |
 | `forge fmt --check` | Pass |
 | `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes |
-| `forge test -vv` | Pass: 200 passed, 0 failed, 8 explicitly skipped fork tests, 208 total |
+| `forge test -vv` | Exact-head callback-proxy hardening pending CI; prior head passed 200 tests with 8 explicit fork-test skips, and this change adds 3 focused deployer regressions |
 | Settlement/accounting invariants | Pass as part of the full suite |
 
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200
@@ -81,7 +82,12 @@ was requested or printed.
 separate deployment. The canonical PoolManager, currencies, callback proxy, and
 RVM identity are dependencies, not Aura-owned deployments.
 
-The router/hook cycle is resolved deterministically, not by placeholder state:
+The router/hook cycle is resolved deterministically, not by placeholder state.
+Before that work begins, preflight requires deployed code at the approved
+callback proxy and an exact match to its separately approved runtime code hash;
+EOAs, mistyped addresses, missing deployments, and bytecode drift are rejected.
+
+The address cycle is resolved as follows:
 
 1. read and freeze the deployer nonce at the finalized preflight block;
 2. calculate the verifier CREATE address and router CREATE address from that

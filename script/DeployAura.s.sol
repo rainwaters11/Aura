@@ -111,6 +111,7 @@ contract DeployAura is Script {
             minedHook: vm.envAddress("AURA_MINED_HOOK"),
             hookSalt: vm.envBytes32("AURA_HOOK_SALT"),
             callbackProxy: vm.envAddress("AURA_CALLBACK_PROXY"),
+            callbackProxyCodeHash: vm.envBytes32("AURA_CALLBACK_PROXY_CODEHASH"),
             expectedRvmId: vm.envAddress("AURA_EXPECTED_RVM_ID"),
             compilerVersion: vm.envString("AURA_COMPILER_VERSION"),
             optimizer: vm.envBool("AURA_OPTIMIZER"),
@@ -128,7 +129,8 @@ contract DeployAura is Script {
                 || config.currency1 != UNICHAIN_SEPOLIA_WETH || config.currency0 >= config.currency1
                 || config.fee != AURA_FEE || config.tickSpacing != AURA_TICK_SPACING
                 || config.deployerStartingNonce > type(uint64).max - 2 || config.deployer == address(0)
-                || config.callbackProxy == address(0) || config.expectedRvmId == address(0)
+                || config.callbackProxy == address(0) || config.callbackProxyCodeHash == bytes32(0)
+                || config.expectedRvmId == address(0)
                 || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
                 || keccak256(bytes(config.compilerVersion)) != keccak256("0.8.30") || !config.optimizer
                 || config.optimizerRuns != 200 || config.viaIr
@@ -138,9 +140,15 @@ contract DeployAura is Script {
         _requireCode(config.currency0);
         _requireCode(config.currency1);
         _requireCode(config.create2Factory);
+        _requireCode(config.callbackProxy);
         if (config.create2Factory.codehash != DETERMINISTIC_DEPLOYMENT_PROXY_CODEHASH) {
             revert CodeHashMismatch(
                 config.create2Factory, DETERMINISTIC_DEPLOYMENT_PROXY_CODEHASH, config.create2Factory.codehash
+            );
+        }
+        if (config.callbackProxy.codehash != config.callbackProxyCodeHash) {
+            revert CodeHashMismatch(
+                config.callbackProxy, config.callbackProxyCodeHash, config.callbackProxy.codehash
             );
         }
         _requireNoCode(config.verifier);

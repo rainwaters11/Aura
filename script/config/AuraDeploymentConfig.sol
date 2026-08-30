@@ -17,6 +17,7 @@ struct AuraDeploymentConfig {
     address minedHook;
     bytes32 hookSalt;
     address callbackProxy;
+    bytes32 callbackProxyCodeHash;
     address expectedRvmId;
     string compilerVersion;
     bool optimizer;
