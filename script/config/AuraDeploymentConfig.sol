@@ -19,6 +19,9 @@ struct AuraDeploymentConfig {
     address callbackProxy;
     bytes32 callbackProxyCodeHash;
     address expectedRvmId;
+    bytes32 verifierCreationCodeHash;
+    bytes32 routerCreationCodeHash;
+    bytes32 hookCreationCodeHash;
     string compilerVersion;
     bool optimizer;
     uint32 optimizerRuns;

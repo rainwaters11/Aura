@@ -22,7 +22,7 @@ In particular:
   preflight environment, so the configured endpoint, deployer address, balance,
   nonce, and required wallet balance could not be validated;
 - currencies, fee, tick spacing, callback proxy and its runtime code hash,
-  expected RVM ID, solution
+  expected RVM ID, the verifier/router/hook creation-code hashes, solution
   publisher, and state-view addresses have not been committed as an approved
   deployment manifest;
 - the Aura Core deployment package exists on this branch, but its approved
@@ -52,6 +52,14 @@ commit above.
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200
 runs, `via_ir = false`, metadata bytecode hash disabled. Foundry used for this
 preflight was Forge 1.8.1.
+
+Those human-readable build fields are defense in depth, not authoritative proof
+of the artifacts used by `forge script`. The typed manifest separately requires
+approved creation-code hashes for `AuraSettlementVerifier`, `AuraRouter`, and
+`AuraHook`. Preflight compares them to the current `type(...).creationCode`
+hashes before dependency checks, address prediction, salt mining, simulation, or
+broadcast. Any compiler, optimizer, or CLI override that changes a deployable
+artifact is rejected.
 
 ## Read-only network evidence
 

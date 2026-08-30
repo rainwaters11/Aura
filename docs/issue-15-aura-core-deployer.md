@@ -36,7 +36,7 @@ for undecided values, so it cannot be accidentally consumed as a valid manifest.
 The deployer script rejects the wrong chain, canonical-address mismatch, missing
 dependency code, zero authorities, nonce drift, occupied output address,
 noncanonical salt, address mismatch, hook-bit mismatch, callback-proxy bytecode
-drift, or build-setting drift.
+drift, creation-code drift, or build-setting drift.
 The pool configuration is immutable and pinned to fee `3000` with tick spacing
 `60`; other nonzero values and incompatible fee/tick-spacing combinations fail
 before hook-address mining or deployment simulation.
@@ -45,6 +45,14 @@ Environment integers are read at full width and checked before narrowing. In
 particular, fee, tick spacing, deployer starting nonce, and optimizer runs reject
 out-of-range values rather than truncating them. The nonce must also leave two
 slots for the verifier and router CREATE address predictions.
+
+The compiler fields document the intended build profile, but are not trusted as
+proof of the bytecode that Foundry actually compiled. The manifest must also
+contain separately approved creation-code hashes for `AuraSettlementVerifier`,
+`AuraRouter`, and `AuraHook`. Preflight hashes each current `type(...).creationCode`
+value and compares it with the approved value before dependency checks, address
+prediction, salt mining, simulation, or broadcast. Compiler and CLI overrides
+therefore fail unless they produce byte-for-byte identical deployable artifacts.
 
 Approved fixed values are:
 
@@ -78,7 +86,8 @@ code; their proxy/implementation governance remains an external dependency.
 
 Values still requiring explicit operator approval are deployer, finalized
 starting nonce, callback proxy address and runtime code hash, and expected RVM
-ID. After those are fixed:
+ID, plus the three creation-code hashes produced by the reviewed locked build.
+After those are fixed:
 
 1. verifier is predicted at `CREATE(deployer, startingNonce)`;
 2. router is predicted at `CREATE(deployer, startingNonce + 1)`;
@@ -163,8 +172,9 @@ Provide and approve exactly:
 ```text
 Use deployer <public address> at finalized nonce <nonce>, callback proxy
 <public address> with runtime code hash <bytes32>, and expected RVM identity
-<public address> to mine the Issue 15 AuraHook address and run an unsigned,
-non-broadcast Unichain Sepolia fork simulation from <exact commit>.
+<public address>, with approved verifier/router/hook creation-code hashes
+<bytes32>/<bytes32>/<bytes32>, to mine the Issue 15 AuraHook address and run an
+unsigned, non-broadcast Unichain Sepolia fork simulation from <exact commit>.
 ```
 
 That approval authorizes only read-only RPC access and unsigned simulation. It

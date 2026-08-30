@@ -52,6 +52,9 @@ contract DeployAuraTest is Test {
             callbackProxy: CALLBACK_PROXY,
             callbackProxyCodeHash: CALLBACK_PROXY.codehash,
             expectedRvmId: RVM_ID,
+            verifierCreationCodeHash: keccak256(type(AuraSettlementVerifier).creationCode),
+            routerCreationCodeHash: keccak256(type(AuraRouter).creationCode),
+            hookCreationCodeHash: keccak256(type(AuraHook).creationCode),
             compilerVersion: "0.8.30",
             optimizer: true,
             optimizerRuns: 200,
@@ -153,6 +156,54 @@ contract DeployAuraTest is Test {
 
     function test_rejectsZeroCallbackProxyCodeHash() public {
         config.callbackProxyCodeHash = bytes32(0);
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsVerifierCreationCodeHashMismatch() public {
+        bytes32 expected = keccak256("unapproved verifier creation code");
+        config.verifierCreationCodeHash = expected;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.CreationCodeHashMismatch.selector,
+                script.VERIFIER_ARTIFACT(),
+                expected,
+                keccak256(type(AuraSettlementVerifier).creationCode)
+            )
+        );
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsRouterCreationCodeHashMismatch() public {
+        bytes32 expected = keccak256("unapproved router creation code");
+        config.routerCreationCodeHash = expected;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.CreationCodeHashMismatch.selector,
+                script.ROUTER_ARTIFACT(),
+                expected,
+                keccak256(type(AuraRouter).creationCode)
+            )
+        );
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsHookCreationCodeHashMismatch() public {
+        bytes32 expected = keccak256("unapproved hook creation code");
+        config.hookCreationCodeHash = expected;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.CreationCodeHashMismatch.selector,
+                script.HOOK_ARTIFACT(),
+                expected,
+                keccak256(type(AuraHook).creationCode)
+            )
+        );
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsZeroApprovedCreationCodeHash() public {
+        config.hookCreationCodeHash = bytes32(0);
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.validatePreflight(config);
     }
@@ -263,6 +314,9 @@ contract DeployAuraTest is Test {
         vm.setEnv("AURA_CALLBACK_PROXY", vm.toString(c.callbackProxy));
         vm.setEnv("AURA_CALLBACK_PROXY_CODEHASH", vm.toString(c.callbackProxyCodeHash));
         vm.setEnv("AURA_EXPECTED_RVM_ID", vm.toString(c.expectedRvmId));
+        vm.setEnv("AURA_VERIFIER_CREATION_CODEHASH", vm.toString(c.verifierCreationCodeHash));
+        vm.setEnv("AURA_ROUTER_CREATION_CODEHASH", vm.toString(c.routerCreationCodeHash));
+        vm.setEnv("AURA_HOOK_CREATION_CODEHASH", vm.toString(c.hookCreationCodeHash));
         vm.setEnv("AURA_COMPILER_VERSION", c.compilerVersion);
         vm.setEnv("AURA_OPTIMIZER", c.optimizer ? "true" : "false");
         vm.setEnv("AURA_OPTIMIZER_RUNS", vm.toString(c.optimizerRuns));

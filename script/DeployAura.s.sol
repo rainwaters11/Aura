@@ -33,12 +33,16 @@ contract DeployAura is Script {
     address public constant DETERMINISTIC_DEPLOYMENT_PROXY = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
     bytes32 public constant DETERMINISTIC_DEPLOYMENT_PROXY_CODEHASH =
         0x2fa86add0aed31f33a762c9d88e807c475bd51d0f52bd0955754b2608f7e4989;
+    bytes32 public constant VERIFIER_ARTIFACT = keccak256("AuraSettlementVerifier");
+    bytes32 public constant ROUTER_ARTIFACT = keccak256("AuraRouter");
+    bytes32 public constant HOOK_ARTIFACT = keccak256("AuraHook");
 
     error WrongChain(uint256 actual);
     error InvalidConfiguration();
     error MissingCode(address account);
     error UnexpectedCode(address account);
     error CodeHashMismatch(address account, bytes32 expected, bytes32 actual);
+    error CreationCodeHashMismatch(bytes32 artifact, bytes32 expected, bytes32 actual);
     error NonceDrift(uint64 expected, uint64 actual);
     error AddressMismatch(address expected, address actual);
     error HookPermissionMismatch(address hook);
@@ -113,6 +117,9 @@ contract DeployAura is Script {
             callbackProxy: vm.envAddress("AURA_CALLBACK_PROXY"),
             callbackProxyCodeHash: vm.envBytes32("AURA_CALLBACK_PROXY_CODEHASH"),
             expectedRvmId: vm.envAddress("AURA_EXPECTED_RVM_ID"),
+            verifierCreationCodeHash: vm.envBytes32("AURA_VERIFIER_CREATION_CODEHASH"),
+            routerCreationCodeHash: vm.envBytes32("AURA_ROUTER_CREATION_CODEHASH"),
+            hookCreationCodeHash: vm.envBytes32("AURA_HOOK_CREATION_CODEHASH"),
             compilerVersion: vm.envString("AURA_COMPILER_VERSION"),
             optimizer: vm.envBool("AURA_OPTIMIZER"),
             optimizerRuns: uint32(optimizerRunsValue),
@@ -131,9 +138,19 @@ contract DeployAura is Script {
                 || config.deployerStartingNonce > type(uint64).max - 2 || config.deployer == address(0)
                 || config.callbackProxy == address(0) || config.callbackProxyCodeHash == bytes32(0)
                 || config.expectedRvmId == address(0) || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
+                || config.verifierCreationCodeHash == bytes32(0) || config.routerCreationCodeHash == bytes32(0)
+                || config.hookCreationCodeHash == bytes32(0)
                 || keccak256(bytes(config.compilerVersion)) != keccak256("0.8.30") || !config.optimizer
                 || config.optimizerRuns != 200 || config.viaIr
         ) revert InvalidConfiguration();
+
+        _requireCreationCodeHash(
+            VERIFIER_ARTIFACT, config.verifierCreationCodeHash, keccak256(type(AuraSettlementVerifier).creationCode)
+        );
+        _requireCreationCodeHash(
+            ROUTER_ARTIFACT, config.routerCreationCodeHash, keccak256(type(AuraRouter).creationCode)
+        );
+        _requireCreationCodeHash(HOOK_ARTIFACT, config.hookCreationCodeHash, keccak256(type(AuraHook).creationCode));
 
         _requireCode(config.poolManager);
         _requireCode(config.currency0);
@@ -215,6 +232,10 @@ contract DeployAura is Script {
     function _requireNonce(address deployer, uint64 expected) internal view {
         uint64 actual = vm.getNonce(deployer);
         if (actual != expected) revert NonceDrift(expected, actual);
+    }
+
+    function _requireCreationCodeHash(bytes32 artifact, bytes32 expected, bytes32 actual) internal pure {
+        if (actual != expected) revert CreationCodeHashMismatch(artifact, expected, actual);
     }
 
     function requireHookFlags(address hook) public pure {
