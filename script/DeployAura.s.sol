@@ -130,8 +130,7 @@ contract DeployAura is Script {
                 || config.fee != AURA_FEE || config.tickSpacing != AURA_TICK_SPACING
                 || config.deployerStartingNonce > type(uint64).max - 2 || config.deployer == address(0)
                 || config.callbackProxy == address(0) || config.callbackProxyCodeHash == bytes32(0)
-                || config.expectedRvmId == address(0)
-                || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
+                || config.expectedRvmId == address(0) || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
                 || keccak256(bytes(config.compilerVersion)) != keccak256("0.8.30") || !config.optimizer
                 || config.optimizerRuns != 200 || config.viaIr
         ) revert InvalidConfiguration();
@@ -147,9 +146,7 @@ contract DeployAura is Script {
             );
         }
         if (config.callbackProxy.codehash != config.callbackProxyCodeHash) {
-            revert CodeHashMismatch(
-                config.callbackProxy, config.callbackProxyCodeHash, config.callbackProxy.codehash
-            );
+            revert CodeHashMismatch(config.callbackProxy, config.callbackProxyCodeHash, config.callbackProxy.codehash);
         }
         _requireNoCode(config.verifier);
         _requireNoCode(config.predictedRouter);
