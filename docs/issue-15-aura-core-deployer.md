@@ -101,10 +101,11 @@ prediction. It is not a generic deterministic-deployment policy.
 - `forge build --sizes --optimize --optimizer-runs 200`: passed. Optimized
   `AuraHook` runtime is 21,716 bytes, 1,284 bytes below the 23,000-byte
   operational ceiling (and 2,860 bytes below EIP-170).
-- Exact-head Foundry results for the callback-proxy hardening are pending CI.
-  The prior head passed 200 tests with 8 intentional Reactive fork skips; this
-  change adds 3 focused deployer regressions for missing code, code-hash drift,
-  and a zero approved code hash.
+- Exact-head CI `#79` passed `forge fmt --check`, `forge build --sizes`, and
+  `forge test -vvv`: 204 tests passed, 0 failed, and 8 intentional Reactive fork
+  tests skipped (212 total). All 21 deployer tests passed, including focused
+  regressions for missing callback-proxy code, code-hash drift, and a zero
+  approved code hash.
 - The required non-broadcast `forge script` command reached configuration load
   and stopped on missing `AURA_CHAIN_ID`, as intended. It did not simulate or
   publish transactions. This is a blocker, not a successful fork simulation.
