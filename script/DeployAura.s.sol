@@ -24,6 +24,8 @@ contract DeployAura is Script {
         uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
     uint160 public constant ALL_HOOK_MASK = uint160(Hooks.ALL_HOOK_MASK);
     uint256 public constant MAX_SALT_ATTEMPTS = 200_000;
+    uint24 public constant AURA_FEE = 3000;
+    int24 public constant AURA_TICK_SPACING = 60;
 
     address public constant UNICHAIN_SEPOLIA_POOL_MANAGER = 0x00B036B58a818B1BC34d502D3fE730Db729e62AC;
     address public constant UNICHAIN_SEPOLIA_USDC = 0x31d0220469e10c4E71834a79b1f276d740d3768F;
@@ -81,15 +83,28 @@ contract DeployAura is Script {
     }
 
     function loadConfig() public view returns (AuraDeploymentConfig memory config) {
+        uint256 feeValue = vm.envUint("AURA_FEE");
+        int256 tickSpacingValue = vm.envInt("AURA_TICK_SPACING");
+        uint256 startingNonceValue = vm.envUint("AURA_DEPLOYER_STARTING_NONCE");
+        uint256 optimizerRunsValue = vm.envUint("AURA_OPTIMIZER_RUNS");
+
+        if (feeValue > type(uint24).max || feeValue != AURA_FEE) revert InvalidConfiguration();
+        if (
+            tickSpacingValue < type(int24).min || tickSpacingValue > type(int24).max
+                || tickSpacingValue != AURA_TICK_SPACING
+        ) revert InvalidConfiguration();
+        if (startingNonceValue > uint256(type(uint64).max) - 2) revert InvalidConfiguration();
+        if (optimizerRunsValue > type(uint32).max || optimizerRunsValue != 200) revert InvalidConfiguration();
+
         config = AuraDeploymentConfig({
             chainId: vm.envUint("AURA_CHAIN_ID"),
             poolManager: vm.envAddress("AURA_POOL_MANAGER"),
             currency0: vm.envAddress("AURA_CURRENCY0"),
             currency1: vm.envAddress("AURA_CURRENCY1"),
-            fee: uint24(vm.envUint("AURA_FEE")),
-            tickSpacing: int24(vm.envInt("AURA_TICK_SPACING")),
+            fee: uint24(feeValue),
+            tickSpacing: int24(tickSpacingValue),
             deployer: vm.envAddress("AURA_DEPLOYER"),
-            deployerStartingNonce: uint64(vm.envUint("AURA_DEPLOYER_STARTING_NONCE")),
+            deployerStartingNonce: uint64(startingNonceValue),
             create2Factory: vm.envAddress("AURA_CREATE2_FACTORY"),
             verifier: vm.envAddress("AURA_VERIFIER"),
             predictedRouter: vm.envAddress("AURA_PREDICTED_ROUTER"),
@@ -99,7 +114,7 @@ contract DeployAura is Script {
             expectedRvmId: vm.envAddress("AURA_EXPECTED_RVM_ID"),
             compilerVersion: vm.envString("AURA_COMPILER_VERSION"),
             optimizer: vm.envBool("AURA_OPTIMIZER"),
-            optimizerRuns: uint32(vm.envUint("AURA_OPTIMIZER_RUNS")),
+            optimizerRuns: uint32(optimizerRunsValue),
             viaIr: vm.envBool("AURA_VIA_IR")
         });
     }
@@ -110,9 +125,11 @@ contract DeployAura is Script {
         }
         if (
             config.poolManager != UNICHAIN_SEPOLIA_POOL_MANAGER || config.currency0 != UNICHAIN_SEPOLIA_USDC
-                || config.currency1 != UNICHAIN_SEPOLIA_WETH || config.currency0 >= config.currency1 || config.fee == 0
-                || config.tickSpacing == 0 || config.deployer == address(0) || config.callbackProxy == address(0)
-                || config.expectedRvmId == address(0) || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
+                || config.currency1 != UNICHAIN_SEPOLIA_WETH || config.currency0 >= config.currency1
+                || config.fee != AURA_FEE || config.tickSpacing != AURA_TICK_SPACING
+                || config.deployerStartingNonce > type(uint64).max - 2 || config.deployer == address(0)
+                || config.callbackProxy == address(0) || config.expectedRvmId == address(0)
+                || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
                 || keccak256(bytes(config.compilerVersion)) != keccak256("0.8.30") || !config.optimizer
                 || config.optimizerRuns != 200 || config.viaIr
         ) revert InvalidConfiguration();

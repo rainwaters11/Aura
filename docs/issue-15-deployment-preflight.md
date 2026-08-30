@@ -45,7 +45,7 @@ commit above.
 | --- | --- |
 | `forge fmt --check` | Pass |
 | `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes |
-| `forge test -vv` | Pass: 192 passed, 0 failed, 8 explicitly skipped fork tests, 200 total |
+| `forge test -vv` | Pass: 200 passed, 0 failed, 8 explicitly skipped fork tests, 208 total |
 | Settlement/accounting invariants | Pass as part of the full suite |
 
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200
@@ -153,10 +153,12 @@ forge script script/DeployAura.s.sol:DeployAura \
 
 The `DeployAura` dry run must reject any chain other than 1301, print only
 public configuration, assert code at all external dependencies, assert currency
-ordering and the exact USDC address, mine and recheck `0x0088`, and emit a
-reviewable deployment plan. Omitting `--broadcast` is mandatory. The dry run is
-not deployment approval and does not replace the production solution-builder
-preflight below.
+ordering and the exact USDC address, require the immutable fee `3000` and tick
+spacing `60`, mine and recheck `0x0088`, and emit a reviewable deployment plan.
+Environment integers must be range-checked at full width before narrowing, and
+the starting nonce must leave room for both predicted CREATE deployments.
+Omitting `--broadcast` is mandatory. The dry run is not deployment approval and
+does not replace the production solution-builder preflight below.
 
 ### Mandatory production solution-builder safety preflight
 

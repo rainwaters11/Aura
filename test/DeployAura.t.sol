@@ -143,6 +143,60 @@ contract DeployAuraTest is Test {
         script.validatePreflight(config);
     }
 
+    function test_rejectsUnapprovedFee() public {
+        config.fee = script.AURA_FEE() + 1;
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsUnapprovedTickSpacing() public {
+        config.tickSpacing = script.AURA_TICK_SPACING() + 1;
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.validatePreflight(config);
+    }
+
+    function test_rejectsIncompatibleFeeAndTickSpacingCombination() public {
+        config.fee = 500;
+        config.tickSpacing = 10;
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.validatePreflight(config);
+    }
+
+    function test_loadConfigRejectsOversizedFeeThatAliasesApprovedValue() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_FEE", vm.toString((uint256(1) << 24) + script.AURA_FEE()));
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.loadConfig();
+    }
+
+    function test_loadConfigRejectsOversizedTickSpacingThatAliasesApprovedValue() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_TICK_SPACING", vm.toString((uint256(1) << 24) + uint24(script.AURA_TICK_SPACING())));
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.loadConfig();
+    }
+
+    function test_loadConfigRejectsOversizedNonceThatAliasesApprovedValue() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString((uint256(1) << 64) + config.deployerStartingNonce));
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.loadConfig();
+    }
+
+    function test_loadConfigRejectsNonceWithoutTwoPredictionSlots() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString(type(uint64).max - 1));
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.loadConfig();
+    }
+
+    function test_loadConfigRejectsOversizedOptimizerRunsThatAliasesApprovedValue() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_OPTIMIZER_RUNS", vm.toString((uint256(1) << 32) + 200));
+        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        script.loadConfig();
+    }
+
     function test_rejectsWrongFactoryAndPermissionBits() public {
         config.create2Factory = address(0xFACADE);
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);

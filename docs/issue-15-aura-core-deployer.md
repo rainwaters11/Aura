@@ -33,6 +33,14 @@ for undecided values, so it cannot be accidentally consumed as a valid manifest.
 The deployer script rejects the wrong chain, canonical-address mismatch, missing
 dependency code, zero authorities, nonce drift, occupied output address,
 noncanonical salt, address mismatch, hook-bit mismatch, or build-setting drift.
+The pool configuration is immutable and pinned to fee `3000` with tick spacing
+`60`; other nonzero values and incompatible fee/tick-spacing combinations fail
+before hook-address mining or deployment simulation.
+
+Environment integers are read at full width and checked before narrowing. In
+particular, fee, tick spacing, deployer starting nonce, and optimizer runs reject
+out-of-range values rather than truncating them. The nonce must also leave two
+slots for the verifier and router CREATE address predictions.
 
 Approved fixed values are:
 
@@ -88,8 +96,8 @@ prediction. It is not a generic deterministic-deployment policy.
 - `forge build --sizes --optimize --optimizer-runs 200`: passed. Optimized
   `AuraHook` runtime is 21,716 bytes, 1,284 bytes below the 23,000-byte
   operational ceiling (and 2,860 bytes below EIP-170).
-- `forge test --optimize --optimizer-runs 200 -vv`: 192 passed, 0 failed, 8
-  existing Reactive fork tests skipped, 200 total. The 10 deployer tests passed.
+- `forge test --optimize --optimizer-runs 200 -vv`: 200 passed, 0 failed, 8
+  existing Reactive fork tests skipped, 208 total. The 18 deployer tests passed.
 - The required non-broadcast `forge script` command reached configuration load
   and stopped on missing `AURA_CHAIN_ID`, as intended. It did not simulate or
   publish transactions. This is a blocker, not a successful fork simulation.
