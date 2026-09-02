@@ -113,9 +113,9 @@ prediction. It is not a generic deterministic-deployment policy.
   8 intentional Reactive fork tests skipped (212 total). All 21 deployer tests
   passed, including focused regressions for missing callback-proxy code,
   code-hash drift, and a zero approved code hash.
-- CI run `#82` passed against the previous PR head,
-  `df487f01c7e39df68970d2fcab7959f4d50c7a0d`. It is historical evidence only
-  and is not evidence for a later PR head.
+- CI run `#82` belongs only to PR #31 commit
+  `df487f01c7e39df68970d2fcab7959f4d50c7a0d`. It is historical evidence only.
+- CI run `#83` is predecessor evidence and does not test this completed patch.
 
 ### Local verification evidence
 
@@ -135,7 +135,8 @@ not substitute for CI on the current PR head.
 
 Current exact-head CI evidence belongs in the PR checks and PR handoff after the
 focused correction commit is pushed. A run for any earlier commit must not be
-described as current exact-head evidence.
+described as current exact-head evidence. New exact-head CI remains pending, and
+no deployment approval may rely on local tests alone.
 
 The test-only deployment uses fictional authorities and a local EVM solely to
 prove transaction order and assertions. Its addresses and aggregate test gas are
@@ -177,6 +178,8 @@ balance is that deployment maximum plus an operator reserve; pool funding is
 separate and is not authorized by this package.
 
 On any mismatch, stop before the next transaction and never initialize a pool.
+A separately approved future pool-initialization transaction must check the
+final PoolId's PoolManager `slot0` again immediately before it is sent.
 A verifier with matching verified bytecode may be reused only under a newly
 reviewed manifest. A router whose hook deployment failed is abandoned with its
 PoolKey. Any hook address/code/immutable mismatch quarantines the entire tuple.

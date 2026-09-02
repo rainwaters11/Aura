@@ -278,6 +278,11 @@ transactions, so an exact total cannot be stated at this commit. Pool
 initialization and liquidity are separate transactions and explicitly excluded
 from preflight and deployment approval unless named.
 
+Immediately before any separately approved future pool-initialization
+transaction, read the final PoolId's PoolManager `slot0` again and stop if its
+`sqrtPriceX96` is nonzero. Local tests alone never constitute deployment
+approval; new exact-head CI must pass as part of the approval evidence.
+
 There is no on-chain rollback for immutable deployments. Failure recovery is:
 
 1. stop after the first failed or mismatched receipt; do not continue the

@@ -5,6 +5,8 @@ out/
 # Remix-generated dependency copies and compiler outputs
 /.deps/
 /artifacts/
+/src/.deps/
+/src/artifacts/
 
 # Ignores development (and goerli) broadcast logs
 !/broadcast

@@ -5,7 +5,10 @@ import {Script, console2} from "forge-std/Script.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 import {AuraHook} from "../src/AuraHook.sol";
@@ -19,6 +22,8 @@ import {AuraDeploymentConfig} from "./config/AuraDeploymentConfig.sol";
 /// @dev The CREATE2 factory accepts calldata `salt || initcode`, as used by the
 ///      deterministic deployment proxy at 0x4e59...956C.
 contract DeployAura is Script {
+    using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
     uint256 public constant UNICHAIN_SEPOLIA_CHAIN_ID = 1301;
     uint160 public constant REQUIRED_HOOK_FLAGS =
         uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
@@ -47,23 +52,17 @@ contract DeployAura is Script {
     error AddressMismatch(address expected, address actual);
     error HookPermissionMismatch(address hook);
     error Create2DeploymentFailed();
+    error AuraPoolAlreadyInitialized(PoolId poolId);
 
     function run() external returns (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) {
         AuraDeploymentConfig memory config = loadConfig();
-        validatePreflight(config);
+        PoolKey memory key = validatePreflight(config);
 
         vm.startBroadcast(config.deployer);
         verifier = new AuraSettlementVerifier();
         if (address(verifier) != config.verifier) revert AddressMismatch(config.verifier, address(verifier));
         _requireNonce(config.deployer, config.deployerStartingNonce + 1);
 
-        PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(config.currency0),
-            currency1: Currency.wrap(config.currency1),
-            fee: config.fee,
-            tickSpacing: config.tickSpacing,
-            hooks: IHooks(config.minedHook)
-        });
         router = new AuraRouter(IPoolManager(config.poolManager), key);
         if (address(router) != config.predictedRouter) {
             revert AddressMismatch(config.predictedRouter, address(router));
@@ -86,7 +85,7 @@ contract DeployAura is Script {
         console2.log("AuraHook", address(hook));
     }
 
-    function loadConfig() public view returns (AuraDeploymentConfig memory config) {
+    function loadConfig() public view virtual returns (AuraDeploymentConfig memory config) {
         uint256 feeValue = vm.envUint("AURA_FEE");
         int256 tickSpacingValue = vm.envInt("AURA_TICK_SPACING");
         uint256 startingNonceValue = vm.envUint("AURA_DEPLOYER_STARTING_NONCE");
@@ -127,7 +126,7 @@ contract DeployAura is Script {
         });
     }
 
-    function validatePreflight(AuraDeploymentConfig memory config) public view {
+    function validatePreflight(AuraDeploymentConfig memory config) public view returns (PoolKey memory key) {
         if (block.chainid != UNICHAIN_SEPOLIA_CHAIN_ID || config.chainId != UNICHAIN_SEPOLIA_CHAIN_ID) {
             revert WrongChain(block.chainid);
         }
@@ -184,6 +183,21 @@ contract DeployAura is Script {
         if (minedSalt != config.hookSalt) revert InvalidConfiguration();
         if (minedHook != config.minedHook) revert AddressMismatch(config.minedHook, minedHook);
         requireHookFlags(hookPrediction);
+
+        key = auraPoolKey(config);
+        PoolId poolId = key.toId();
+        (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
+        if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(poolId);
+    }
+
+    function auraPoolKey(AuraDeploymentConfig memory config) public pure returns (PoolKey memory) {
+        return PoolKey({
+            currency0: Currency.wrap(config.currency0),
+            currency1: Currency.wrap(config.currency1),
+            fee: config.fee,
+            tickSpacing: config.tickSpacing,
+            hooks: IHooks(config.minedHook)
+        });
     }
 
     function hookInitcode(AuraDeploymentConfig memory config) public pure returns (bytes memory) {
