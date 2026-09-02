@@ -238,7 +238,7 @@ hook, exact transaction list, and maximum test ETH spend:
 ```bash
 forge script script/DeployAura.s.sol:DeployAura \
   --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
-  --broadcast --verify \
+  --broadcast --verify --slow \
   --verifier blockscout \
   --verifier-url https://unichain-sepolia.blockscout.com/api/ \
   -vvvv
