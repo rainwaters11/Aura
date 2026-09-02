@@ -117,13 +117,21 @@ prediction. It is not a generic deterministic-deployment policy.
   `df487f01c7e39df68970d2fcab7959f4d50c7a0d`. It is historical evidence only.
 - CI run `#83` is predecessor evidence and does not test this completed patch.
 
-### Local verification evidence
+### Historical local verification evidence
+
+The handoff records local snapshot `5d91ef0` separately from CI run `#80`.
+That snapshot is not a GitHub Actions run, is not the current PR head, and
+predates the atomic constructor guard and its additional deployment test.
 
 - `forge fmt` and `forge fmt --check`: passed.
 - `git diff --check`: passed.
 - `forge build --sizes --optimize --optimizer-runs 200`: passed. Optimized
   `AuraHook` runtime is 21,716 bytes, 1,284 bytes below the 23,000-byte
   operational ceiling (and 2,860 bytes below EIP-170).
+- `forge test --match-contract DeployAuraTest -vv`: 27 passed, 0 failed, 0
+  skipped.
+- `forge test -vv`: 210 passed, 0 failed, 8 intentionally skipped Reactive
+  fork tests, 218 total.
 - The required non-broadcast `forge script` command reached configuration load
   and stopped on missing `AURA_CHAIN_ID`, as intended. It did not simulate or
   publish transactions. This is a blocker, not a successful fork simulation.

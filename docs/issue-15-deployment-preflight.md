@@ -42,16 +42,19 @@ The worktree was empty before branching. `origin/main` was fetched immediately
 before the branch was created; both `origin/main` and `HEAD` resolved to the base
 commit above.
 
-| Gate | Result |
-| --- | --- |
-| `forge fmt --check` | Pass |
-| `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes |
-| `forge test -vvv` | Exact-head CI `#80` passed: 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed |
-| Settlement/accounting invariants | Pass as part of the full suite |
+| Gate | Historical result | Provenance |
+| --- | --- | --- |
+| `forge fmt --check` | Pass | Local handoff snapshot `5d91ef0`; not CI and not the current PR head |
+| `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes | Local handoff snapshot `5d91ef0`; predates the constructor guard |
+| `forge test -vvv` | 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed | Historical CI run `#80` at `74768bafe67a73bd8a4a3bb2e650ca182869bb30` |
+| Focused and full local reruns | 27 deployer tests passed; 210 full-suite tests passed, 0 failed, 8 intentionally skipped, 218 total | Local handoff snapshot `5d91ef0`; separate from CI run `#80` and not current exact-head evidence |
+| Settlement/accounting invariants | Pass as part of the historical full suites | CI run `#80` and local snapshot `5d91ef0`; neither covers the current constructor guard |
 
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200
-runs, `via_ir = false`, metadata bytecode hash disabled. Foundry used for this
-preflight was Forge 1.8.1.
+runs, `via_ir = false`, metadata bytecode hash disabled. Foundry used for the
+historical preflight was Forge 1.8.1. Every result above is explicitly
+historical; exact-head CI for the constructor guard and its new deployment test
+remains pending.
 
 Those human-readable build fields are defense in depth, not authoritative proof
 of the artifacts used by `forge script`. The typed manifest separately requires
