@@ -30,9 +30,9 @@ This gives the demo four visible properties:
    `msg.sender`, and `AuraHook` holds the input as a PoolManager ERC-6909 claim.
 2. **Close** — a two-sided batch closes at four orders or after the strict
    20-block intake window, subject to feasibility and deadline checks.
-3. **Settle** — an authenticated Reactive callback proposes a bounded solution.
-   The hook independently recomputes membership, price, payouts, residual, and
-   accounting before executing.
+3. **Settle** — the configured callback boundary delivers a bounded solution.
+   The hook independently authenticates the caller and recomputes membership,
+   price, payouts, residual, and accounting before executing.
 4. **Claim or refund** — recipients pull settled output. Unsettled orders become
    owner-refundable at the protocol's fixed timeout boundary.
 
@@ -44,11 +44,26 @@ This gives the demo four visible properties:
 | `AuraHook` | Parks input, freezes batches, validates settlement, resolves PoolManager deltas, and accounts for claims/refunds | On-chain protocol authority; rechecks all external fields |
 | `AuraClearingMath` | Derives the canonical uniform price, payouts, residual, and conservation bounds | Pure, fuzzed, and invariant-tested |
 | `AuraSettlementVerifier` | Reconstructs frozen order state and validates the typed solution domain | Reads trusted state from the calling hook |
-| Reactive transport | Carries a bounded proposal to the destination callback | Authenticated transport only; cannot bypass hook validation |
+| Settlement callback boundary | Accepts a bounded proposal only from the approved proxy and RVM identity | Off-chain builder, inbox, and transport automation are deferred |
 | Frontend | Demonstrates the lifecycle and evidence | Untrusted convenience layer; never an accounting source |
 
-The full normative design and trust model live in
-[`docs/design.md`](./docs/design.md) and [`docs/agent.md`](./docs/agent.md).
+## Specifications and gate evidence
+
+Aura's Three-Pillar architecture separates authority:
+
+1. [`docs/design.md`](./docs/design.md) defines the protocol, accounting, and
+   on-chain invariants.
+2. [`docs/agent.md`](./docs/agent.md) specifies the future builder, inbox, and
+   transport boundary.
+3. [`docs/skill.md`](./docs/skill.md) defines allowed commands, evidence, and
+   approval gates.
+
+The consolidated
+[`AURA_CODEX_BUILD_REPORT.md`](./docs/AURA_CODEX_BUILD_REPORT.md#three-pillar-architecture)
+records the architecture decisions. The
+[`Sprint 1 parking and custody gate`](./docs/progress-updates/sprint-1-parking-gate.md)
+and [merged Settlement Console PR #29](https://github.com/rainwaters11/Aura/pull/29)
+provide the late-August implementation evidence used by this delivery branch.
 
 ## Safety invariants
 
@@ -61,8 +76,8 @@ The full normative design and trust model live in
 - Every PoolManager delta must resolve to zero before the unlock returns.
 - Claim liabilities and recorded dust remain fully backed by hook-owned claims.
 - Callback proxy and RVM identity are independently authenticated.
-- A missing builder, inbox, RPC, or Reactive callback cannot block the fixed
-  timeout-refund path.
+- A missing future builder, inbox, RPC, or callback transport cannot block the
+  fixed timeout-refund path.
 - Deployment rejects an already initialized final PoolId both before broadcast
   and inside the hook constructor's CREATE2 transaction.
 
@@ -175,7 +190,7 @@ Included in the MVP:
 - one canonical uniform rational price;
 - peer-to-peer matching plus at most one residual pool swap;
 - ERC-6909-backed claims, tracked dust, and timeout refunds; and
-- authenticated Reactive delivery of bounded solutions.
+- an authenticated settlement callback boundary for bounded solutions.
 
 Explicitly excluded:
 
@@ -183,6 +198,7 @@ Explicitly excluded:
 - multi-hop or multi-pool execution;
 - arbitrary solver calls or solver competition;
 - mainnet deployment and production economic optimization; and
+- production builder, inbox, and callback transport automation; and
 - synchronous compliance services that could block claims or refunds.
 
 ## License
