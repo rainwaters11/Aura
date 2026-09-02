@@ -81,7 +81,7 @@ was requested or printed.
 ### Existing narrowed Core
 
 | Order | Contract | Network | Constructor dependencies | Verification constructor ABI |
-| --- | --- | --- | --- |
+| --- | --- | --- | --- | --- |
 | 1 | `AuraSettlementVerifier` | Unichain Sepolia | None | `0x` |
 | 2 | `AuraRouter` | Unichain Sepolia | canonical PoolManager; immutable PoolKey containing the **predicted** AuraHook, sorted currencies, fee, and tick spacing | `(address,(address,address,uint24,int24,address))` |
 | 3 | `AuraHook` | Unichain Sepolia, CREATE2 | PoolManager, deployed router, currencies, fee, tick spacing, deployed verifier, callback proxy, expected RVM ID | `(address,address,address,address,uint24,int24,address,address,address)` |
