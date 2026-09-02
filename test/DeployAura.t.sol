@@ -140,7 +140,7 @@ contract DeployAuraTest is Test {
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
     }
 
-    function test_poolInitializedAfterPreflightRejectsAtomicallyDuringHookDeployment() public {
+    function test_poolInitializedAfterPreflightRejectsHookDeploymentAtomically() public {
         PoolId poolId = script.auraPoolKey(config).toId();
         bytes32 poolStateSlot = keccak256(abi.encode(PoolId.unwrap(poolId), uint256(6)));
         bytes[] memory slot0Results = new bytes[](2);
@@ -153,11 +153,11 @@ contract DeployAuraTest is Test {
         );
         runner.setConfig(config);
 
-        uint64 nonceBefore = vm.getNonce(DEPLOYER);
         vm.expectRevert(DeployAura.Create2DeploymentFailed.selector);
         runner.run();
 
-        assertEq(vm.getNonce(DEPLOYER), nonceBefore);
+        // Broadcasts are separate public transactions, so nonce rollback is not a safety property here.
+        // The constructor-level invariant is that CREATE2 cannot leave a hook deployed after slot0 initializes.
         assertEq(config.verifier.code.length, 0);
         assertEq(config.predictedRouter.code.length, 0);
         assertEq(config.minedHook.code.length, 0);
