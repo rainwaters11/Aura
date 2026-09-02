@@ -321,5 +321,5 @@ for <exact transaction count> transactions and at most <exact test ETH>.
 Do not initialize or fund the pool.
 ```
 
-Any approval lacking one of those fields, or naming a different commit/address),
+Any approval lacking one of those fields, or naming a different commit/address,
 does not authorize signing or broadcast.
