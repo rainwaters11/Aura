@@ -140,6 +140,30 @@ contract DeployAuraTest is Test {
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
     }
 
+    function test_poolInitializedAfterPreflightRejectsAtomicallyDuringHookDeployment() public {
+        PoolId poolId = script.auraPoolKey(config).toId();
+        bytes32 poolStateSlot = keccak256(abi.encode(PoolId.unwrap(poolId), uint256(6)));
+        bytes[] memory slot0Results = new bytes[](2);
+        slot0Results[0] = abi.encode(bytes32(0));
+        slot0Results[1] = abi.encode(bytes32(uint256(1)));
+        vm.mockCalls(
+            config.poolManager,
+            abi.encodeWithSelector(PoolManagerSlot0Mock.extsload.selector, poolStateSlot),
+            slot0Results
+        );
+        runner.setConfig(config);
+
+        uint64 nonceBefore = vm.getNonce(DEPLOYER);
+        vm.expectRevert(DeployAura.Create2DeploymentFailed.selector);
+        runner.run();
+
+        assertEq(vm.getNonce(DEPLOYER), nonceBefore);
+        assertEq(config.verifier.code.length, 0);
+        assertEq(config.predictedRouter.code.length, 0);
+        assertEq(config.minedHook.code.length, 0);
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
+    }
+
     function test_rejectsWrongChain() public {
         vm.chainId(1);
         vm.expectRevert(abi.encodeWithSelector(DeployAura.WrongChain.selector, 1));

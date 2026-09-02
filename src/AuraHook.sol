@@ -11,6 +11,7 @@ import {BeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {IAuraRouter} from "./interfaces/IAuraRouter.sol";
@@ -22,6 +23,7 @@ import {IAuraSettlementVerifier} from "./interfaces/IAuraSettlementVerifier.sol"
 contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
 
     uint8 public constant ORDER_DATA_VERSION = 1;
     uint8 public constant MAX_BATCH_ORDERS = 4;
@@ -91,6 +93,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     error InsufficientClaimBalance();
     error UnauthorizedRouter();
     error InvalidPool();
+    error AuraPoolAlreadyInitialized(PoolId poolId);
     error ExactOutputUnsupported();
     error MalformedOrderData();
     error InvalidOrder();
@@ -197,6 +200,8 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
         _tickSpacing = tickSpacing;
         auraPoolId = PoolKey(currency0, currency1, fee, tickSpacing, this).toId();
         if (PoolId.unwrap(router.auraPoolId()) != PoolId.unwrap(auraPoolId)) revert InvalidPool();
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(auraPoolId);
+        if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(auraPoolId);
     }
 
     function settleBatch(address rvmId, BatchSolution calldata solution) external {

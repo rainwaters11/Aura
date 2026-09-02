@@ -278,6 +278,11 @@ transactions, so an exact total cannot be stated at this commit. Pool
 initialization and liquidity are separate transactions and explicitly excluded
 from preflight and deployment approval unless named.
 
+The script rejects an initialized final PoolId during preflight. AuraHook also
+reads that PoolId's PoolManager `slot0` in its constructor and rejects a nonzero
+`sqrtPriceX96`, making the decisive guard atomic with CREATE2 hook deployment if
+pool state changes after simulation but before broadcast.
+
 Immediately before any separately approved future pool-initialization
 transaction, read the final PoolId's PoolManager `slot0` again and stop if its
 `sqrtPriceX96` is nonzero. Local tests alone never constitute deployment

@@ -178,6 +178,9 @@ balance is that deployment maximum plus an operator reserve; pool funding is
 separate and is not authorized by this package.
 
 On any mismatch, stop before the next transaction and never initialize a pool.
+The script rejects an already-initialized final PoolId during preflight, and the
+AuraHook constructor repeats that check in the CREATE2 transaction so pool
+initialization between simulation and broadcast cannot produce a usable hook.
 A separately approved future pool-initialization transaction must check the
 final PoolId's PoolManager `slot0` again immediately before it is sent.
 A verifier with matching verified bytecode may be reused only under a newly
