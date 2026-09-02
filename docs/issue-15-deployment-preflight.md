@@ -81,7 +81,7 @@ was requested or printed.
 ### Existing narrowed Core
 
 | Order | Contract | Network | Constructor dependencies | Verification constructor ABI |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- |
 | 1 | `AuraSettlementVerifier` | Unichain Sepolia | None | `0x` |
 | 2 | `AuraRouter` | Unichain Sepolia | canonical PoolManager; immutable PoolKey containing the **predicted** AuraHook, sorted currencies, fee, and tick spacing | `(address,(address,address,uint24,int24,address))` |
 | 3 | `AuraHook` | Unichain Sepolia, CREATE2 | PoolManager, deployed router, currencies, fee, tick spacing, deployed verifier, callback proxy, expected RVM ID | `(address,address,address,address,uint24,int24,address,address,address)` |
@@ -155,9 +155,9 @@ history, command arguments, logs, or this repository.
 
 ```bash
 test "$(cast chain-id --rpc-url "$UNICHAIN_SEPOLIA_RPC")" = 1301
-cast code "$POOL_MANAGER" --rpc-url "$UNICHAIN_SEPOLIA_RPC" | test "$(cat)" != 0x
-cast balance "$DEPLOYER" --rpc-url "$UNICHAIN_SEPOLIA_RPC"
-cast nonce "$DEPLOYER" --block finalized --rpc-url "$UNICHAIN_SEPOLIA_RPC"
+cast code "$AURA_POOL_MANAGER" --rpc-url "$UNICHAIN_SEPOLIA_RPC" | test "$(cat)" != 0x
+cast balance "$AURA_DEPLOYER" --rpc-url "$UNICHAIN_SEPOLIA_RPC"
+cast nonce "$AURA_DEPLOYER" --block finalized --rpc-url "$UNICHAIN_SEPOLIA_RPC"
 forge fmt --check
 forge build --sizes
 forge test -vv
@@ -321,5 +321,5 @@ for <exact transaction count> transactions and at most <exact test ETH>.
 Do not initialize or fund the pool.
 ```
 
-Any approval lacking one of those fields, or naming a different commit/address,
+Any approval lacking one of those fields, or naming a different commit/address),
 does not authorize signing or broadcast.
