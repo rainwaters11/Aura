@@ -1,19 +1,31 @@
-<div align="center">
+<p align="center">
+  <img
+    src="docs/aura-logo.png"
+    alt="Aura bounded batch settlement logo"
+    width="900"
+  />
+</p>
 
-<img
-  src="./docs/aura-logo.png"
-  alt="Aura bounded batch settlement logo"
-  width="900"
-/>
+<a id="aura"></a>
+<h1 align="center">AURA</h1>
 
-<br />
+<h3 align="center">Bounded batch settlement for Uniswap v4</h3>
 
+<p align="center">
+  <strong>
+    Park compatible intent. Match it directly. Send only the residual to the pool.
+  </strong>
+</p>
 
-<div align="center">
-
-### Bounded batch settlement for Uniswap v4
-
-**Park compatible intent. Match it directly. Send only the residual to the pool.**
+<p align="center">
+  <a href="#why-aura">Why Aura</a> ·
+  <a href="#how-aura-works">How it works</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#judge-demo">Demo</a> ·
+  <a href="#run-locally">Run locally</a> ·
+  <a href="#verification">Tests</a> ·
+  <a href="#security-model">Security</a>
+</p>
 
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.30-363636?style=for-the-badge&logo=solidity&logoColor=white)](https://soliditylang.org/)
 [![Foundry](https://img.shields.io/badge/Foundry-1.7.1-f4a261?style=for-the-badge)](https://book.getfoundry.sh/)
@@ -24,12 +36,6 @@
 [![Orders](https://img.shields.io/badge/Orders-Exact_Input-457b9d?style=flat-square)](#scope)
 [![Batch](https://img.shields.io/badge/Batch-Maximum_4-6d597a?style=flat-square)](#scope)
 [![Pool Swaps](https://img.shields.io/badge/Residual_Swaps-Maximum_1-e76f51?style=flat-square)](#how-aura-works)
-
-<br />
-
-**[Why Aura](#why-aura) · [How it works](#how-aura-works) · [Features](#features) · [Demo](#judge-demo) · [Run locally](#run-locally) · [Tests](#verification) · [Security](#security-model)**
-
-</div>
 
 ---
 
@@ -87,6 +93,7 @@ Add the final hero screenshot after capturing it at the submission commit:
 
 ---
 
+<a id="why-aura"></a>
 ## Why Aura
 
 Aura started with one practical question:
@@ -139,6 +146,7 @@ Aura is a narrowly scoped Uniswap v4 hook that:
 > one canonical price, one residual, and one clear recovery path make the
 > protocol easier to verify.
 
+<a id="how-aura-works"></a>
 ## How Aura works
 
 ```mermaid
@@ -203,6 +211,7 @@ fixed timeout boundary.
 | **Independent recovery** | Refunds do not depend on an off-chain operator remaining available |
 | **Evidence aware** | Local fixtures, traces, and public transactions are labeled differently |
 
+<a id="features"></a>
 ## Features
 
 <table>
@@ -311,6 +320,7 @@ fixed timeout boundary.
 | [`docs/demo-runbook.md`](./docs/demo-runbook.md) | Three-minute judge presentation and recovery plan |
 | [`NOTICE.md`](./NOTICE.md) | Project origin and upstream attribution |
 
+<a id="judge-demo"></a>
 ## Judge demo
 
 <!--
@@ -342,6 +352,7 @@ broadcast, pool initialization, or funds.
 | Claim | Output appears as a recipient-controlled liability and is claimed |
 | Perfect CoW | Direct matching reaches 100% with zero residual and no pool movement |
 
+<a id="run-locally"></a>
 ## Run locally
 
 ### Prerequisites
@@ -411,6 +422,7 @@ Open [`http://localhost:5173`](http://localhost:5173).
 | Data unavailable | `http://localhost:5173/?preview=unavailable` |
 | Claim error | `http://localhost:5173/?preview=claim-error` |
 
+<a id="verification"></a>
 ## Verification
 
 Run all checks from the exact commit used for the video and final submission.
@@ -456,6 +468,7 @@ npm run build
 > submission commit and update the table if the observed results change. Do not
 > reuse an earlier run as exact-head evidence.
 
+<a id="security-model"></a>
 ## Security model
 
 | Property | Enforcement |
