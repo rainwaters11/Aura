@@ -4,10 +4,16 @@ Aura is a bounded batch-auction settlement hook for Uniswap v4. It parks
 exact-input orders without moving the pool curve, clears compatible flow at one
 uniform price, and sends at most one unmatched residual swap to the pool.
 
-The MVP is deliberately narrow: one pool, full fills, no arbitrary solver
-interactions, sovereign output claims, and a permissionless timeout-refund path.
-The judge-facing interface runs from deterministic local evidence and does not
-require a wallet or public deployment.
+The on-chain MVP slice is deliberately narrow: one pool, full fills, no
+arbitrary solver interactions, sovereign output claims, and a permissionless
+timeout-refund path. The judge-facing interface runs from deterministic local
+evidence and does not require a wallet or public deployment.
+
+A production-complete MVP additionally requires the solution builder, solution
+inbox, authenticated Reactive dispatcher, and callback transport described in
+the normative specifications. Those components are required but deferred and
+unimplemented on this delivery branch. This branch therefore has no live-user
+transport path and is not production ready.
 
 ## Why Aura
 
@@ -44,7 +50,7 @@ This gives the demo four visible properties:
 | `AuraHook` | Parks input, freezes batches, validates settlement, resolves PoolManager deltas, and accounts for claims/refunds | On-chain protocol authority; rechecks all external fields |
 | `AuraClearingMath` | Derives the canonical uniform price, payouts, residual, and conservation bounds | Pure, fuzzed, and invariant-tested |
 | `AuraSettlementVerifier` | Reconstructs frozen order state and validates the typed solution domain | Reads trusted state from the calling hook |
-| Settlement callback boundary | Accepts a bounded proposal only from the approved proxy and RVM identity | Off-chain builder, inbox, and transport automation are deferred |
+| Settlement callback boundary | Accepts a bounded proposal only from the approved proxy and RVM identity | Production builder, inbox, authenticated Reactive dispatcher, and callback transport are required for a production-complete MVP but deferred and unimplemented on this branch |
 | Frontend | Demonstrates the lifecycle and evidence | Untrusted convenience layer; never an accounting source |
 
 ## Specifications and gate evidence
@@ -53,8 +59,9 @@ Aura's Three-Pillar architecture separates authority:
 
 1. [`docs/design.md`](./docs/design.md) defines the protocol, accounting, and
    on-chain invariants.
-2. [`docs/agent.md`](./docs/agent.md) specifies the future builder, inbox, and
-   transport boundary.
+2. [`docs/agent.md`](./docs/agent.md) specifies the required production
+   builder, solution inbox, authenticated Reactive dispatcher, and callback
+   transport boundary. These components are deferred and unimplemented here.
 3. [`docs/skill.md`](./docs/skill.md) defines allowed commands, evidence, and
    approval gates.
 
@@ -76,8 +83,8 @@ provide the late-August implementation evidence used by this delivery branch.
 - Every PoolManager delta must resolve to zero before the unlock returns.
 - Claim liabilities and recorded dust remain fully backed by hook-owned claims.
 - Callback proxy and RVM identity are independently authenticated.
-- A missing future builder, inbox, RPC, or callback transport cannot block the
-  fixed timeout-refund path.
+- The deferred builder, inbox, RPC, dispatcher, or callback transport cannot
+  block the fixed timeout-refund path.
 - Deployment rejects an already initialized final PoolId both before broadcast
   and inside the hook constructor's CREATE2 transaction.
 
@@ -91,7 +98,9 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:5173` and follow the on-screen sequence:
+Open `http://localhost:5173` and follow the on-screen sequence. **Load demo
+orders** creates deterministic local demonstration data, not live user orders
+or evidence of an implemented production transport path:
 
 1. Park the deterministic two-sided orders.
 2. Close the batch after its displayed intake window.
@@ -189,8 +198,11 @@ Included in the MVP:
 - exact-input, full-fill, two-direction orders;
 - one canonical uniform rational price;
 - peer-to-peer matching plus at most one residual pool swap;
-- ERC-6909-backed claims, tracked dust, and timeout refunds; and
-- an authenticated settlement callback boundary for bounded solutions.
+- ERC-6909-backed claims, tracked dust, and timeout refunds;
+- an authenticated settlement callback boundary for bounded solutions; and
+- the production solution builder, solution inbox, authenticated Reactive
+  dispatcher, and callback transport required for a production-complete MVP,
+  which are deferred and unimplemented on this delivery branch.
 
 Explicitly excluded:
 
@@ -198,7 +210,6 @@ Explicitly excluded:
 - multi-hop or multi-pool execution;
 - arbitrary solver calls or solver competition;
 - mainnet deployment and production economic optimization; and
-- production builder, inbox, and callback transport automation; and
 - synchronous compliance services that could block claims or refunds.
 
 ## License
