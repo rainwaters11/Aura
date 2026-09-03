@@ -83,7 +83,7 @@ provide the late-August implementation evidence used by this delivery branch.
 
 ## Run the judge demo
 
-Prerequisites: Node.js 20 or newer and npm.
+Prerequisites: Node.js `^20.19.0` or `>=22.12.0`, and npm.
 
 ```bash
 cd frontend
