@@ -80,7 +80,7 @@ Point to the four-stage rail: Park, Match, Settle residual, Claim.
 
 ### 0:25–0:55 — Park without moving the curve
 
-Click **Park demo orders**.
+Click **Load demo orders**.
 
 Explain:
 
@@ -100,7 +100,7 @@ The demo uses the protocol's strict 20-block intake boundary.
 
 ### 1:20–2:05 — Settle only the difference
 
-Click **Settle batch**.
+Click **Submit solution**.
 
 Point to:
 
@@ -114,7 +114,9 @@ from frozen state and reverts a stale, noncanonical, or underfunded proposal.
 
 ### 2:05–2:30 — Sovereign claim
 
-Click **Claim Alice output**.
+Click the dynamically labeled claim control, shown in this fixture as **Claim 4
+WETH**. The amount and token in this label are derived from the selected
+recipient's claimable output.
 
 Explain that settlement credits a recipient-owned liability and the user pulls
 the underlying output. A failed recipient transfer rolls back without consuming
@@ -123,8 +125,8 @@ refund path.
 
 ### 2:30–2:55 — Perfect CoW proof
 
-Reset the console and select **Perfect CoW**. Advance through Park, Close, and
-Settle.
+Reset the console and select **Perfect CoW**. Advance through **Load demo
+orders**, **Close batch**, and **Submit solution**.
 
 Point out that direct matching reaches 100%, residual volume is zero, and pool
 price and tick remain unchanged. This is the clearest visual proof of the core
