@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 import {DeployAura} from "../script/DeployAura.s.sol";
@@ -12,8 +12,36 @@ import {AuraHook} from "../src/AuraHook.sol";
 import {AuraRouter} from "../src/AuraRouter.sol";
 import {AuraSettlementVerifier} from "../src/AuraSettlementVerifier.sol";
 
+contract PoolManagerSlot0Mock {
+    mapping(bytes32 slot => bytes32 value) internal words;
+    uint256 public initializeCalls;
+
+    function extsload(bytes32 slot) external view returns (bytes32) {
+        return words[slot];
+    }
+
+    function setSlot0(PoolId poolId, uint160 sqrtPriceX96) external {
+        words[keccak256(abi.encode(PoolId.unwrap(poolId), uint256(6)))] = bytes32(uint256(sqrtPriceX96));
+    }
+}
+
+contract DeployAuraHarness is DeployAura {
+    AuraDeploymentConfig private configOverride;
+
+    function setConfig(AuraDeploymentConfig memory config_) external {
+        configOverride = config_;
+    }
+
+    function loadConfig() public view override returns (AuraDeploymentConfig memory) {
+        return configOverride;
+    }
+}
+
 contract DeployAuraTest is Test {
+    using PoolIdLibrary for PoolKey;
+
     DeployAura internal script;
+    DeployAuraHarness internal runner;
     AuraDeploymentConfig internal config;
 
     address internal constant DEPLOYER = address(0xA11CE);
@@ -24,8 +52,10 @@ contract DeployAuraTest is Test {
     function setUp() public {
         vm.chainId(1301);
         script = new DeployAura();
+        runner = new DeployAuraHarness();
 
-        vm.etch(script.UNICHAIN_SEPOLIA_POOL_MANAGER(), hex"00");
+        PoolManagerSlot0Mock poolManagerMock = new PoolManagerSlot0Mock();
+        vm.etch(script.UNICHAIN_SEPOLIA_POOL_MANAGER(), address(poolManagerMock).code);
         vm.etch(script.UNICHAIN_SEPOLIA_USDC(), hex"00");
         vm.etch(script.UNICHAIN_SEPOLIA_WETH(), hex"00");
         vm.etch(CALLBACK_PROXY, hex"00");
@@ -64,10 +94,10 @@ contract DeployAuraTest is Test {
     }
 
     function test_deploysExactConstructorsPredictionsFactorySaltAndFlagsWithoutInitializingPool() public {
-        _setEnvironment(config);
+        runner.setConfig(config);
         bytes32 poolManagerCodeHashBefore = script.UNICHAIN_SEPOLIA_POOL_MANAGER().codehash;
 
-        (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) = script.run();
+        (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) = runner.run();
 
         assertEq(address(verifier), config.verifier);
         assertEq(address(router), config.predictedRouter);
@@ -86,6 +116,52 @@ contract DeployAuraTest is Test {
         assertEq(hook.expectedRvmId(), RVM_ID);
         assertEq(PoolId.unwrap(hook.auraPoolId()), PoolId.unwrap(router.auraPoolId()));
         assertEq(script.UNICHAIN_SEPOLIA_POOL_MANAGER().codehash, poolManagerCodeHashBefore);
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
+    }
+
+    function test_uninitializedPredictedPoolIdPassesPreflight() public view {
+        PoolKey memory key = script.validatePreflight(config);
+        assertEq(PoolId.unwrap(key.toId()), PoolId.unwrap(script.auraPoolKey(config).toId()));
+    }
+
+    function test_preinitializedPredictedPoolRejectsBeforeAnyDeployment() public {
+        PoolId poolId = script.auraPoolKey(config).toId();
+        PoolManagerSlot0Mock(config.poolManager).setSlot0(poolId, 1);
+        runner.setConfig(config);
+
+        uint64 nonceBefore = vm.getNonce(DEPLOYER);
+        vm.expectRevert(abi.encodeWithSelector(DeployAura.AuraPoolAlreadyInitialized.selector, poolId));
+        runner.run();
+
+        assertEq(vm.getNonce(DEPLOYER), nonceBefore);
+        assertEq(config.verifier.code.length, 0);
+        assertEq(config.predictedRouter.code.length, 0);
+        assertEq(config.minedHook.code.length, 0);
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
+    }
+
+    function test_poolInitializedAfterPreflightRejectsHookDeploymentAtomically() public {
+        PoolId poolId = script.auraPoolKey(config).toId();
+        bytes32 poolStateSlot = keccak256(abi.encode(PoolId.unwrap(poolId), uint256(6)));
+        bytes[] memory slot0Results = new bytes[](2);
+        slot0Results[0] = abi.encode(bytes32(0));
+        slot0Results[1] = abi.encode(bytes32(uint256(1)));
+        vm.mockCalls(
+            config.poolManager,
+            abi.encodeWithSelector(PoolManagerSlot0Mock.extsload.selector, poolStateSlot),
+            slot0Results
+        );
+        runner.setConfig(config);
+
+        vm.expectRevert(DeployAura.Create2DeploymentFailed.selector);
+        runner.run();
+
+        // Broadcasts are separate public transactions, so nonce rollback is not a safety property here.
+        // The constructor-level invariant is that CREATE2 cannot leave a hook deployed after slot0 initializes.
+        assertEq(config.verifier.code.length, 0);
+        assertEq(config.predictedRouter.code.length, 0);
+        assertEq(config.minedHook.code.length, 0);
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
     }
 
     function test_rejectsWrongChain() public {

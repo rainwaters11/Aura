@@ -299,7 +299,7 @@ Approved command pattern:
 ```bash
 forge script script/DeployAura.s.sol:DeployAura \
   --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
-  --broadcast \
+  --broadcast --slow \
   --verify \
   --verifier blockscout \
   --verifier-url https://unichain-sepolia.blockscout.com/api/ \

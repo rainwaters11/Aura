@@ -105,19 +105,46 @@ prediction. It is not a generic deterministic-deployment policy.
 
 ## Verification evidence
 
+### Historical CI evidence
+
+- CI run `#80` passed against historical commit
+  `74768bafe67a73bd8a4a3bb2e650ca182869bb30`. It ran `forge fmt --check`,
+  `forge build --sizes`, and `forge test -vvv`: 204 tests passed, 0 failed, and
+  8 intentional Reactive fork tests skipped (212 total). All 21 deployer tests
+  passed, including focused regressions for missing callback-proxy code,
+  code-hash drift, and a zero approved code hash.
+- CI run `#82` belongs only to PR #31 commit
+  `df487f01c7e39df68970d2fcab7959f4d50c7a0d`. It is historical evidence only.
+- CI run `#83` is predecessor evidence and does not test this completed patch.
+
+### Historical local verification evidence
+
+The handoff records local snapshot `5d91ef0` separately from CI run `#80`.
+That snapshot is not a GitHub Actions run, is not the current PR head, and
+predates the atomic constructor guard and its additional deployment test.
+
 - `forge fmt` and `forge fmt --check`: passed.
 - `git diff --check`: passed.
 - `forge build --sizes --optimize --optimizer-runs 200`: passed. Optimized
   `AuraHook` runtime is 21,716 bytes, 1,284 bytes below the 23,000-byte
   operational ceiling (and 2,860 bytes below EIP-170).
-- Exact-head CI `#80` passed `forge fmt --check`, `forge build --sizes`, and
-  `forge test -vvv`: 204 tests passed, 0 failed, and 8 intentional Reactive fork
-  tests skipped (212 total). All 21 deployer tests passed, including focused
-  regressions for missing callback-proxy code, code-hash drift, and a zero
-  approved code hash.
+- `forge test --match-contract DeployAuraTest -vv`: 27 passed, 0 failed, 0
+  skipped.
+- `forge test -vv`: 210 passed, 0 failed, 8 intentionally skipped Reactive
+  fork tests, 218 total.
 - The required non-broadcast `forge script` command reached configuration load
   and stopped on missing `AURA_CHAIN_ID`, as intended. It did not simulate or
   publish transactions. This is a blocker, not a successful fork simulation.
+
+These results were produced locally during the earlier implementation and do
+not substitute for CI on the current PR head.
+
+### Current exact-head CI evidence
+
+Current exact-head CI evidence belongs in the PR checks and PR handoff after the
+focused correction commit is pushed. A run for any earlier commit must not be
+described as current exact-head evidence. New exact-head CI remains pending, and
+no deployment approval may rely on local tests alone.
 
 The test-only deployment uses fictional authorities and a local EVM solely to
 prove transaction order and assertions. Its addresses and aggregate test gas are
@@ -159,6 +186,11 @@ balance is that deployment maximum plus an operator reserve; pool funding is
 separate and is not authorized by this package.
 
 On any mismatch, stop before the next transaction and never initialize a pool.
+The script rejects an already-initialized final PoolId during preflight, and the
+AuraHook constructor repeats that check in the CREATE2 transaction so pool
+initialization between simulation and broadcast cannot produce a usable hook.
+A separately approved future pool-initialization transaction must check the
+final PoolId's PoolManager `slot0` again immediately before it is sent.
 A verifier with matching verified bytecode may be reused only under a newly
 reviewed manifest. A router whose hook deployment failed is abandoned with its
 PoolKey. Any hook address/code/immutable mismatch quarantines the entire tuple.

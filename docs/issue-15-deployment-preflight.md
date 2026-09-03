@@ -42,16 +42,19 @@ The worktree was empty before branching. `origin/main` was fetched immediately
 before the branch was created; both `origin/main` and `HEAD` resolved to the base
 commit above.
 
-| Gate | Result |
-| --- | --- |
-| `forge fmt --check` | Pass |
-| `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes |
-| `forge test -vvv` | Exact-head CI `#80` passed: 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed |
-| Settlement/accounting invariants | Pass as part of the full suite |
+| Gate | Historical result | Provenance |
+| --- | --- | --- |
+| `forge fmt --check` | Pass | Local handoff snapshot `5d91ef0`; not CI and not the current PR head |
+| `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes | Local handoff snapshot `5d91ef0`; predates the constructor guard |
+| `forge test -vvv` | 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed | Historical CI run `#80` at `74768bafe67a73bd8a4a3bb2e650ca182869bb30` |
+| Focused and full local reruns | 27 deployer tests passed; 210 full-suite tests passed, 0 failed, 8 intentionally skipped, 218 total | Local handoff snapshot `5d91ef0`; separate from CI run `#80` and not current exact-head evidence |
+| Settlement/accounting invariants | Pass as part of the historical full suites | CI run `#80` and local snapshot `5d91ef0`; neither covers the current constructor guard |
 
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200
-runs, `via_ir = false`, metadata bytecode hash disabled. Foundry used for this
-preflight was Forge 1.8.1.
+runs, `via_ir = false`, metadata bytecode hash disabled. Foundry used for the
+historical preflight was Forge 1.8.1. Every result above is explicitly
+historical; exact-head CI for the constructor guard and its new deployment test
+remains pending.
 
 Those human-readable build fields are defense in depth, not authoritative proof
 of the artifacts used by `forge script`. The typed manifest separately requires
@@ -155,9 +158,9 @@ history, command arguments, logs, or this repository.
 
 ```bash
 test "$(cast chain-id --rpc-url "$UNICHAIN_SEPOLIA_RPC")" = 1301
-cast code "$POOL_MANAGER" --rpc-url "$UNICHAIN_SEPOLIA_RPC" | test "$(cat)" != 0x
-cast balance "$DEPLOYER" --rpc-url "$UNICHAIN_SEPOLIA_RPC"
-cast nonce "$DEPLOYER" --block finalized --rpc-url "$UNICHAIN_SEPOLIA_RPC"
+cast code "$AURA_POOL_MANAGER" --rpc-url "$UNICHAIN_SEPOLIA_RPC" | test "$(cat)" != 0x
+cast balance "$AURA_DEPLOYER" --rpc-url "$UNICHAIN_SEPOLIA_RPC"
+cast nonce "$AURA_DEPLOYER" --block finalized --rpc-url "$UNICHAIN_SEPOLIA_RPC"
 forge fmt --check
 forge build --sizes
 forge test -vv
@@ -238,7 +241,7 @@ hook, exact transaction list, and maximum test ETH spend:
 ```bash
 forge script script/DeployAura.s.sol:DeployAura \
   --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
-  --broadcast --verify \
+  --broadcast --verify --slow \
   --verifier blockscout \
   --verifier-url https://unichain-sepolia.blockscout.com/api/ \
   -vvvv
@@ -277,6 +280,16 @@ inbox and Reactive dispatcher deployments and configuration/funding
 transactions, so an exact total cannot be stated at this commit. Pool
 initialization and liquidity are separate transactions and explicitly excluded
 from preflight and deployment approval unless named.
+
+The script rejects an initialized final PoolId during preflight. AuraHook also
+reads that PoolId's PoolManager `slot0` in its constructor and rejects a nonzero
+`sqrtPriceX96`, making the decisive guard atomic with CREATE2 hook deployment if
+pool state changes after simulation but before broadcast.
+
+Immediately before any separately approved future pool-initialization
+transaction, read the final PoolId's PoolManager `slot0` again and stop if its
+`sqrtPriceX96` is nonzero. Local tests alone never constitute deployment
+approval; new exact-head CI must pass as part of the approval evidence.
 
 There is no on-chain rollback for immutable deployments. Failure recovery is:
 

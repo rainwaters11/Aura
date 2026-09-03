@@ -1,346 +1,637 @@
-# 🛡️ Argos LTS — Liquidity Toxic Shield
+<div align="center">
 
-### *Front-running the front-runner. Protecting LPs before toxic flow ever lands.*
+<img
+  src="./docs/aura-logo.png"
+  alt="Aura bounded batch settlement logo"
+  width="900"
+/>
 
-> **A Uniswap v4 hook on Unichain that detects toxic MEV arbitrage on Ethereum L1, intercepts the attack on Unichain before it executes, and parks risky swaps as ERC-6909 claims instead of reverting — with Lit Protocol gating trustless redemption.**
+<br />
 
-**Argos LTS** is an on-chain liquidity protection layer for Uniswap v4 pools on Unichain. It watches Ethereum Mainnet for sandwich attack patterns using the Reactive Network, flags attacker addresses before their Unichain swap lands, and silently intercepts their trade — converting it into a redeemable ERC-6909 claim rather than throwing a hard revert. LPs are shielded from toxic arbitrage drain. Users preserve their transaction value. And Lit Protocol ensures the redemption gate is decentralized, auditable, and trustless.
 
-Built for DeFi protocols and LP operators who want MEV protection without sacrificing user experience.
+<div align="center">
 
-[![CI](https://github.com/rainwaters11/argos/actions/workflows/ci.yml/badge.svg)](https://github.com/rainwaters11/argos/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Solidity](https://img.shields.io/badge/Solidity-0.8.26-blue)](https://docs.soliditylang.org/)
-[![Foundry](https://img.shields.io/badge/Built%20with-Foundry-black)](https://book.getfoundry.sh/)
-[![Unichain Sepolia](https://img.shields.io/badge/Network-Unichain%20Sepolia-blueviolet)](https://unichain-sepolia.blockscout.com/address/0x4cD1d072fc30C5038c8F4163a2F3848f135fC088)
+### Bounded batch settlement for Uniswap v4
 
-**Track:** Crypto — Onchain Economies / Consumer DeFi  
-**Sponsor Integration:** Lit Protocol  
-**Hackathon:** [PLGenesis Frontiers of Collaboration](https://plgenesis.devfolio.co/) — **Existing Code track**
+**Park compatible intent. Match it directly. Send only the residual to the pool.**
 
----
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.30-363636?style=for-the-badge&logo=solidity&logoColor=white)](https://soliditylang.org/)
+[![Foundry](https://img.shields.io/badge/Foundry-1.7.1-f4a261?style=for-the-badge)](https://book.getfoundry.sh/)
+[![Uniswap](https://img.shields.io/badge/Uniswap-v4-ff007a?style=for-the-badge&logo=uniswap&logoColor=white)](https://docs.uniswap.org/contracts/v4/overview)
+[![License](https://img.shields.io/badge/License-MIT-2a9d8f?style=for-the-badge)](./LICENSE)
 
-## Why It Matters
+[![Demo](https://img.shields.io/badge/Demo-Deterministic_Local-264653?style=flat-square)](#judge-demo)
+[![Orders](https://img.shields.io/badge/Orders-Exact_Input-457b9d?style=flat-square)](#scope)
+[![Batch](https://img.shields.io/badge/Batch-Maximum_4-6d597a?style=flat-square)](#scope)
+[![Pool Swaps](https://img.shields.io/badge/Residual_Swaps-Maximum_1-e76f51?style=flat-square)](#how-aura-works)
 
-- 🔴 **LPs are bleeding** — toxic MEV arbitrage drains value from every pool, every block
-- ❌ **Hard reverts punish users** — cancelling a swap with `revert` wastes gas and destroys UX
-- 🅿️ **Parking preserves value** — Argos intercepts risky swaps and holds tokens as ERC-6909 claims, safe on-chain, redeemable any time
-- 🔐 **Lit Protocol makes redemption trustless** — no centralized server decides when you can redeem; a Lit Action running in a TEE reads on-chain state and countersigns the tx
+<br />
 
----
+**[Why Aura](#why-aura) · [How it works](#how-aura-works) · [Features](#features) · [Demo](#judge-demo) · [Run locally](#run-locally) · [Tests](#verification) · [Security](#security-model)**
 
-## 🎬 Demo
-
-📹 **[Watch the 3-minute walkthrough →](https://youtu.be/mhyES8E9KaM)**  
-*Shows the full flow from toxic detection to Lit-gated redemption.*
-
-The demo walks through:
-1. Reactive Network detecting a sandwich pattern on L1 (block N)
-2. `flagToxicAddress()` arriving on Unichain within the same block window
-3. Arb's Unichain swap intercepted → tokens parked as an ERC-6909 claim (no revert)
-4. Lit Protocol TEE enforcing the 5-minute toxic window
-5. User successfully redeeming parked tokens after the window expires
+</div>
 
 ---
 
-## 🚀 Live Deployment
+> [!IMPORTANT]
+> **Aura is a tested Hookathon build with a deterministic local judge demo.**
+> It is not publicly deployed or production-ready. The interface uses local
+> fixture data and does not represent live user orders or public-chain
+> transactions.
 
-### ArgosLTSHook v2 — Unichain Sepolia (Chain ID 1301)
-
-| Item | Value |
-|---|---|
-| **Network** | Unichain Sepolia (Chain ID 1301) |
-| **ArgosLTSHook** | [`0x4cD1d072fc30C5038c8F4163a2F3848f135fC088`](https://unichain-sepolia.blockscout.com/address/0x4cD1d072fc30C5038c8F4163a2F3848f135fC088) |
-| **Verified Contract** | [View on Blockscout ↗](https://unichain-sepolia.blockscout.com/address/0x4cD1d072fc30C5038c8F4163a2F3848f135fC088?tab=contract) |
-| **Deploy Tx** | [`0xfdbf678c...d1d1721`](https://unichain-sepolia.blockscout.com/tx/0xfdbf678cf219a95fb4ff9975478f09fad4d2be15140604cd37fce21b8d1d1721) |
-| **Deploy Block** | `48162660` |
-| **Parking Enabled Tx** | [`0x940512...336f7`](https://unichain-sepolia.blockscout.com/tx/0x940512568e4145592cac5187ef790923bdcfea5ff53e7cf5dce6865f991336f7) |
-| **Parking Enabled Block** | `48165069` |
-| **Hook Flags** | `BEFORE_SWAP_FLAG \| BEFORE_SWAP_RETURNS_DELTA_FLAG` (`0x88`) |
-| **PoolManager** | `0x00B036B58a818B1BC34d502D3fE730Db729e62AC` |
-
-### Argos v1 (Original Submission — Preserved)
-
-| Contract | Address |
-|---|---|
-| `Argos.sol` (v1 hook) | [`0xCd6606e077b271316d09De8521ADBE72f8eB4088`](https://unichain-sepolia.blockscout.com/address/0xCd6606e077b271316d09De8521ADBE72f8eB4088) |
-| `ArgosRiskAdapter` | [`0x82EC3A310dF509A3bDe959DefBfeaa444Bb06a1B`](https://unichain-sepolia.blockscout.com/address/0x82EC3A310dF509A3bDe959DefBfeaa444Bb06a1B) |
-
----
-
-## 🔧 How It Works
-
-### 1 — Detection (Reactive Network)
-
-`ReactiveArbitrageSensor` is a Reactive Smart Contract (RSC) that subscribes to Uniswap V3 `Swap` events on Ethereum Mainnet. When the same address sends **≥2 swaps in a single L1 block** (sandwich pattern), it dispatches a cross-chain callback to Unichain:
-
-```
-flagToxicAddress(arbAddress) → ArgosLTSHook on Unichain (chain ID 1301)
-```
-
-Unichain's 250ms Flashblock preconfirmations give us **~48 Unichain blocks** of advance warning before the arb's Unichain swap arrives — enough time to flag them first.
-
-```
-Ethereum L1      ████▓▓░░░░░░  12s per block
-                 ┌─────────────────────────────────────────┐
-Reactive Network │ detects sandwich pattern from L1 events  │── cross-chain callback
-                 └─────────────────────────────────────────┘
-                                        │
-Unichain         ░░░░░░░░  250ms per block
-                 │← ~48 blocks advance warning →│
-                 ↓
-         ArgosLTSHook.flagToxicAddress(arb) ← arrives BEFORE arb's swap
-```
-
-### 2 — Protection (Dual Hook Modes)
-
-Once flagged, the next swap from that address on a protected pool triggers one of two responses:
-
-**🅿️ PARK Mode** *(default — better UX)*  
-The swap is intercepted without reverting. Input tokens are minted as an ERC-6909 claim in Uniswap V4's PoolManager. The user's transaction settles cleanly, tokens are safe on-chain, and they can redeem anytime via `redeemParkedClaim()`.
-
-**💸 PENALIZE Mode** *(for dynamic-fee pools)*  
-The swap executes, but the fee is overridden to 10%, routing the surplus to LPs as direct MEV compensation. The fee decays linearly back to 0.30% as the 5-minute toxic window expires.
-
-### 3 — Redemption (Lit Protocol)
-
-Parked claims are redeemable on-chain — but the recommended path uses a **Lit Action** running inside a TEE:
-
-1. Reads `toxicExpiry(user)` from Unichain via on-chain RPC call inside the Lit node
-2. Enforces the 5-minute toxic window — no early redemptions
-3. Threshold-signs `redeemParkedClaim(currency, amount)` via Lit PKP if conditions pass
-4. Submits the signed tx to Unichain — user never touches a private key for this step
-
----
-
-## 🔐 Sponsor Integration: Lit Protocol
+## At a glance
 
 | | |
-|---|---|
-| **Sponsor** | Lit Protocol |
-| **Integration files** | [`integrations/lit-protocol/`](./integrations/lit-protocol/) |
-| **What Lit does** | Gates redemption of parked ERC-6909 claims by verifying on-chain conditions before releasing funds |
-| **Why it matters** | No centralized server owns the gate — the Lit Action is published to IPFS and runs in a distributed TEE across Lit nodes |
+| --- | --- |
+| **Project** | Aura |
+| **Category** | Uniswap v4 hook |
+| **Core idea** | Match compatible orders before touching the pool |
+| **Settlement model** | Bounded batch auction with one uniform price |
+| **Judge path** | Deterministic Settlement Console plus contract tests |
+| **Public deployment** | Not included |
+| **Prize-track partner integrations** | None |
+| **License** | MIT |
 
-**Integration depth:**
-- `lit-action.js` — IPFS-hosted serverless action: reads `toxicExpiry(user)` on-chain, enforces the 5-minute window, threshold-signs the redemption tx via Lit PKP
-- `redeem-with-lit.ts` — TypeScript CLI client (`@lit-protocol/lit-node-client`, `ethers v6`) with `--check-only` eligibility mode
-- Inline fallback logic embedded in the action handler for demo reliability
-- Tested end-to-end: check-only mode confirms eligibility; full mode broadcasts signed tx to Unichain
+<!--
+Add the final hero screenshot after capturing it at the submission commit:
 
-This directly enables the "fair redemption" story: a wrongly-flagged user has a transparent, auditable, decentralized path to reclaim their tokens — provably enforced by Lit's TSS network, not a dev's server.
+![Aura Settlement Console](docs/images/aura-settlement-console.png)
+-->
 
----
+## Table of contents
 
-## 📋 Hackathon Changelog
+<details>
+<summary><strong>Open navigation</strong></summary>
 
-> **Required for Existing Code submissions.** The following changes were built during the PLGenesis hackathon event.
+- [Why Aura](#why-aura)
+- [The problem](#the-problem)
+- [The solution](#the-solution)
+- [How Aura works](#how-aura-works)
+- [What makes Aura different](#what-makes-aura-different)
+- [Features](#features)
+- [Scope](#scope)
+- [Architecture](#architecture)
+- [Judge demo](#judge-demo)
+- [Run locally](#run-locally)
+- [Using the Settlement Console](#using-the-settlement-console)
+- [Verification](#verification)
+- [Security model](#security-model)
+- [Partner integrations](#partner-integrations)
+- [New work for this Hookathon](#new-work-for-this-hookathon)
+- [Challenges and lessons](#challenges-and-lessons)
+- [Evidence and provenance](#evidence-and-provenance)
+- [Credits](#credits)
+- [License](#license)
 
-### v1 → v2 at a Glance
-
-| Feature | v1 (Original) | v2 (PLGenesis — This Submission) |
-|---|---|---|
-| Toxic flagging granularity | Pool-level risk states | **Address-level** (`flagToxicAddress()`) |
-| Bad swap handling | Hard revert | **ERC-6909 PARK mode** (no revert, tokens safe) |
-| LP compensation | None | **PENALIZE mode** — 10% fee override with linear decay |
-| Redemption gate | On-chain only | **Lit Protocol TEE** — decentralized, verifiable |
-| Cross-chain detection | L1 Transfer events | **Sandwich pattern** — ≥2 swaps/block per sender |
-| Test coverage | 36 tests | **63 tests** (+27 new, including fuzz) |
-| Source code verified | ❌ | **✅ Blockscout verified** |
-| Deployment scripts | None | **CREATE2 + Unichain Sepolia scripts** |
-| Frontend | None | **React + Vite demo UI** |
-| Sponsor integration | None | **Lit Protocol** (`integrations/lit-protocol/`) |
-
-### v2.0.0 — PLGenesis Revamp (2026-03-31)
-
-**Smart Contracts**
-- [x] Deployed `ArgosLTSHook.sol` v2 to Unichain Sepolia (`0x4cD1d072fc30C5038c8F4163a2F3848f135fC088`)
-- [x] Verified contract source code on Blockscout (resolves original judge feedback: "Couldn't find smart contracts' source code")
-- [x] Implemented address-level toxic flagging (`flagToxicAddress()`) — more granular than v1's pool-level states
-- [x] Implemented ERC-6909 **PARK mode** — swaps intercepted without hard revert, tokens held as claims
-- [x] Implemented **PENALIZE mode** — dynamic fee override (base → 10%) with linear decay for dynamic-fee pools
-- [x] Built `redeemParkedClaim()` with CEI-safe `poolManager.unlock()` callback pattern
-- [x] Added `ReactiveArbitrageSensor.sol` — Reactive Network RSC detecting L1 sandwich patterns (≥2 swaps/block)
-- [x] Extracted `ToxicFlowLib.sol` — pure library for `isToxic()` and `computePenaltyFee()` with linear decay
-- [x] Added `IArgosLTS.sol` and `IReactiveSensor.sol` — fully NatSpec-documented interfaces
-- [x] Enabled PARK mode on-chain via owner call (Tx: `0x940512...336f7`, Block: 48165069)
-
-**Testing**
-- [x] Added `test/ArgosLTSHook.t.sol` — 7 tests: passthrough, parking, redemption, expiry, PENALIZE, unauthorized sensor, fuzz roundtrip
-- [x] Added `test/ERC6909Parking.t.sol` — 4 edge case tests: zero-amount, over-redemption, accumulation, multi-currency
-- [x] Added `test/ToxicFlowDetection.t.sol` — 13 tests: library unit tests + sensor callback tests + fuzz
-- [x] All 63 tests passing (`forge test -v`)
-
-**Sponsor Integration**
-- [x] Built `integrations/lit-protocol/lit-action.js` — IPFS-hosted Lit Action with on-chain state check and PKP signing
-- [x] Built `integrations/lit-protocol/redeem-with-lit.ts` — TypeScript CLI client for Lit-gated redemption
-- [x] Added inline Lit action fallback for demo reliability
-- [x] Added `integrations/lit-protocol/README.md` — full architecture and usage docs
-
-**Deployment & Infrastructure**
-- [x] Added `script/Deploy.s.sol` — CREATE2 salt mining + multi-env deployment script
-- [x] Added `script/DeployUnichain.s.sol` — Unichain Sepolia–specific deployment (chain ID 1301)
-- [x] Added deployment metadata: tx hash, block numbers, deployer address, PoolManager address
-
-**Frontend**
-- [x] Built React + Vite demo frontend (`frontend/`) pointing to the live deployed hook
-- [x] Frontend displays live contract address, deployment metadata, and redemption flow UX
-
-**Documentation**
-- [x] Rewrote `README.md` with full judge-oriented structure
-- [x] Added `CHANGELOG.md` as explicit v1→v2 migration record
-- [x] Added deployment table with Blockscout verified links and tx hashes
-
-### v1.0.0 — Original Submission (2025-12-01)
-
-- Original `Argos.sol` v1 hook (pool-level risk states, preserved intact)
-- `ReactiveSentry.sol` and `ArgosRiskAdapter.sol` — v1 Reactive pipeline
-- 36 passing tests in `test/Argos.t.sol`
-
-See [CHANGELOG.md](./CHANGELOG.md) for the complete version history with diff-level detail.
+</details>
 
 ---
 
-## 📁 Repo Structure
+## Why Aura
 
-```
-Argos_LTS/
-├── src/
-│   ├── ArgosLTSHook.sol             # v2 hook — PLGenesis submission ★
-│   ├── ReactiveArbitrageSensor.sol  # Reactive RSC: L1 sandwich detection ★
-│   ├── Argos.sol                    # v1 hook (stable, preserved)
-│   ├── ReactiveSentry.sol           # v1 Reactive subscriber
-│   ├── ArgosRiskAdapter.sol         # v1 callback bridge
-│   ├── interfaces/
-│   │   ├── IArgosLTS.sol            # ★ New
-│   │   └── IReactiveSensor.sol      # ★ New
-│   └── libraries/
-│       └── ToxicFlowLib.sol         # Pure detection + penalty math ★
-├── test/
-│   ├── ArgosLTSHook.t.sol           # v2 tests: 7 cases ★
-│   ├── ERC6909Parking.t.sol         # ERC-6909 edge cases: 4 tests ★
-│   ├── ToxicFlowDetection.t.sol     # Library + sensor: 13 tests ★
-│   ├── Argos.t.sol                  # v1 tests: 36 passing (unchanged)
-│   └── ReactiveE2E.t.sol            # v1 E2E (unchanged)
-├── script/
-│   ├── Deploy.s.sol                 # Generic deployment ★
-│   └── DeployUnichain.s.sol         # Unichain Sepolia deployment ★
-├── integrations/
-│   └── lit-protocol/                # Sponsor bounty integration ★
-│       ├── lit-action.js            # IPFS Lit Action — PKP signing gate
-│       ├── redeem-with-lit.ts       # TypeScript CLI client
-│       ├── README.md
-│       └── package.json
-├── frontend/                        # React + Vite demo UI ★
-├── demo-video/                      # Demo recording assets
-├── CHANGELOG.md                     # Full v1→v2 migration record ★
-└── foundry.toml
+Aura started with one practical question:
 
-★ = added during PLGenesis hackathon
+> **If two users want opposite sides of a trade, why should all of their volume
+> hit the AMM curve first?**
+
+Ordinary pool execution treats each order independently. Yet compatible buy
+and sell intent may already exist inside a small group of users. Aura explores
+a different sequence: collect a tightly bounded batch, match what naturally
+fits, and use Uniswap v4 only for the difference.
+
+That makes the pool the **residual venue**, not the first venue.
+
+## The problem
+
+Sending every order directly through an automated market maker can create
+avoidable price impact and consume liquidity even when another user wants to
+trade in the opposite direction.
+
+Batch settlement can reduce that unnecessary movement, but only if it is
+designed with strong boundaries. Otherwise, a publisher might manipulate the
+price, change batch membership, submit a malformed residual, or leave users
+dependent on an unavailable off-chain service.
+
+Aura narrows those risks into a system that judges can inspect:
+
+| Risk | Aura boundary |
+| --- | --- |
+| Publisher chooses a favorable price | The hook derives one canonical price from the frozen feasible interval |
+| Orders change during settlement | Batch membership freezes before settlement |
+| Residual execution becomes arbitrary | Only one exact-input residual swap is permitted |
+| Claims lose their backing | Liabilities and dust are checked against hook-owned ERC-6909 claims |
+| A proposal is reused | Settlement solutions are replay-protected |
+| An external service disappears | Owners retain a fixed permissionless timeout-refund path |
+
+## The solution
+
+Aura is a narrowly scoped Uniswap v4 hook that:
+
+1. parks exact-input orders without immediately moving the pool curve;
+2. freezes a batch containing no more than four orders;
+3. computes one canonical uniform clearing price;
+4. matches compatible volume directly;
+5. sends at most one unmatched residual through the pool; and
+6. credits recipient-controlled claims or returns unsettled input after timeout.
+
+> [!NOTE]
+> Aura deliberately chooses depth over breadth. One pool, one bounded batch,
+> one canonical price, one residual, and one clear recovery path make the
+> protocol easier to verify.
+
+## How Aura works
+
+```mermaid
+flowchart TD
+    A[Park exact-input orders] --> B[Close and freeze the batch]
+    B --> C[Match compatible flow at one price]
+    C --> D[Send one residual to Uniswap v4]
+    D --> E[Claim output or recover after timeout]
 ```
 
----
+### 01. Park
 
-## ⚡ Running Locally
+Users enter through `AuraRouter.placeOrder`. The router binds order ownership
+to the actual caller and forwards the single approved pool key.
+
+`AuraHook` records the order and holds the input through the PoolManager's
+ERC-6909 claim system. Parking does not immediately execute the order against
+the pool curve.
+
+### 02. Close
+
+The hook closes the batch only after its protocol conditions are satisfied. It
+freezes membership and checks capacity, deadlines, price feasibility, and
+payout encoding.
+
+Once closed, the batch cannot silently change underneath settlement.
+
+### 03. Match
+
+`AuraSettlementVerifier` reconstructs the frozen order state. Aura derives one
+canonical rational clearing price and calculates the volume that can match
+directly.
+
+The proposal does not get to rewrite the rules. The hook independently checks
+membership, price, payouts, matched volume, residual direction, backing, and
+final accounting.
+
+### 04. Settle the residual
+
+If the two order directions do not perfectly balance, Aura sends only the
+remaining difference through Uniswap v4 as a single exact-input swap.
+
+Every PoolManager delta must resolve before the unlock returns.
+
+### 05. Claim or refund
+
+Successful settlement records recipient-owned claimable balances. Recipients
+pull their underlying output through the claim path.
+
+If settlement does not complete, owners can recover parked input after the
+fixed timeout boundary.
+
+## What makes Aura different
+
+| Principle | What it means |
+| --- | --- |
+| **Match first** | Compatible flow settles directly before the pool is used |
+| **One price** | Every order in the frozen batch uses the same canonical price |
+| **Residual only** | No more than one unmatched exact-input swap reaches the pool |
+| **Hook verified** | The contract recomputes the solution instead of trusting the publisher |
+| **Sovereign claims** | Recipients control when to pull their settled output |
+| **Independent recovery** | Refunds do not depend on an off-chain operator remaining available |
+| **Evidence aware** | Local fixtures, traces, and public transactions are labeled differently |
+
+## Features
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### Settlement
+
+- Canonical uniform clearing price
+- Direct peer-to-peer matching
+- Maximum one residual pool swap
+- Frozen batch membership
+- Solution replay protection
+- Strict settlement validation
+
+</td>
+<td width="50%" valign="top">
+
+### User protection
+
+- Router-authenticated ownership
+- Recipient-controlled claims
+- Failed-transfer rollback
+- Permissionless timeout refunds
+- ERC-6909-backed liabilities
+- Explicit protocol-dust accounting
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Verification
+
+- Unit tests
+- Fuzz tests
+- Integration tests
+- Regression tests
+- Invariant coverage
+- Contract-size checks
+
+</td>
+<td width="50%" valign="top">
+
+### Judge experience
+
+- Responsive Settlement Console
+- Direct-match and residual visualization
+- Perfect CoW scenario
+- Claim-state evidence
+- Failure and recovery previews
+- Explicit evidence provenance
+
+</td>
+</tr>
+</table>
+
+## Scope
+
+### Included
+
+- One immutable Uniswap v4 pool.
+- Exact-input, full-fill orders.
+- Two order directions.
+- Maximum of four orders in the active batch.
+- Strict 20-block intake window.
+- Canonical rational clearing price.
+- Peer-to-peer matching before pool execution.
+- At most one residual swap.
+- Claim liabilities, protocol dust, and timeout refunds.
+- Contract tests and deterministic judge interface.
+
+### Not included
+
+- Exact-output orders.
+- Partial fills.
+- Multi-hop routing.
+- Multi-pool batches.
+- Arbitrary solver call plans.
+- Live wallets.
+- Automated off-chain settlement transport.
+- Public deployment or production liquidity.
+
+> [!WARNING]
+> The judged build is not production-ready. Do not present local fixture
+> addresses as deployed contracts or local trace identifiers as public
+> transaction hashes.
+
+## Architecture
+
+| Component | Responsibility | Trust boundary |
+| --- | --- | --- |
+| [`AuraRouter`](./src/AuraRouter.sol) | Authenticates order entry and submits the immutable pool | Cannot assign a different owner or pool |
+| [`AuraHook`](./src/AuraHook.sol) | Parks input, freezes batches, settles residual flow, and accounts for claims and refunds | Final on-chain accounting authority |
+| [`AuraClearingMath`](./src/libraries/AuraClearingMath.sol) | Calculates price, payouts, matching, residuals, and conservation bounds | Pure deterministic math |
+| [`AuraSettlementVerifier`](./src/AuraSettlementVerifier.sol) | Reconstructs and validates the frozen solution | Reads trusted state from the calling hook |
+| Settlement Console | Explains the lifecycle and displays evidence | Untrusted presentation layer |
+
+### Technical documentation
+
+| Document | Purpose |
+| --- | --- |
+| [`docs/design.md`](./docs/design.md) | Protocol behavior and accounting specification |
+| [`docs/security.md`](./docs/security.md) | Threat model and verified invariants |
+| [`docs/AURA_CODEX_BUILD_REPORT.md`](./docs/AURA_CODEX_BUILD_REPORT.md) | Consolidated architecture and build evidence |
+| [`docs/demo-runbook.md`](./docs/demo-runbook.md) | Three-minute judge presentation and recovery plan |
+| [`NOTICE.md`](./NOTICE.md) | Project origin and upstream attribution |
+
+## Judge demo
+
+<!--
+REQUIRED BEFORE SUBMISSION:
+
+Replace this comment with the final public video link:
+[Watch the Aura demo](PUBLIC_VIDEO_URL)
+
+The video must be publicly accessible, no longer than five minutes, and use a
+human voice. The Aura runbook targets approximately three minutes.
+-->
+
+### The presentation story
+
+> **Park together → match directly → settle the residual → claim sovereignly**
+
+The recommended judge path uses the same Settlement Console for the complete
+demonstration. It requires no wallet, faucet, public RPC, deployment, signature,
+broadcast, pool initialization, or funds.
+
+### What the judge should see
+
+| Stage | Visible proof |
+| --- | --- |
+| Park | Opposite orders enter the bounded batch without displayed curve movement |
+| Close | Membership freezes at the intake boundary |
+| Match | One price applies to both directions |
+| Residual | Direct-match volume is separated from the single pool residual |
+| Claim | Output appears as a recipient-controlled liability and is claimed |
+| Perfect CoW | Direct matching reaches 100% with zero residual and no pool movement |
+
+## Run locally
 
 ### Prerequisites
 
-- [Foundry](https://book.getfoundry.sh/getting-started/installation)
-- Node.js ≥ 18 (for Lit Protocol integration and frontend)
+| Requirement | Version |
+| --- | --- |
+| Git | Current stable release |
+| Foundry | `1.7.1` |
+| Node.js | `^20.19.0` or `>=22.12.0` |
+| npm | Included with supported Node.js |
 
-### Smart Contracts
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/rainwaters11/argos
-cd argos/Argos_LTS
-
-forge install
-forge build
-
-# Run all 63 tests
-forge test -v
-
-# Run specific suites
-forge test --match-path "test/ArgosLTSHook.t.sol" -v
-forge test --match-path "test/ERC6909Parking.t.sol" -v
-forge test --match-path "test/ToxicFlowDetection.t.sol" -v
+git clone https://github.com/rainwaters11/Aura.git
+cd Aura
+git submodule update --init --recursive
 ```
 
-**Expected output:**
-```
-Ran 36 tests for test/Argos.t.sol              ✅ 36 passed
-Ran 7  tests for test/ArgosLTSHook.t.sol       ✅ 7  passed
-Ran 4  tests for test/ERC6909Parking.t.sol     ✅ 4  passed
-Ran 13 tests for test/ToxicFlowDetection.t.sol ✅ 13 passed
-Ran 3  tests for test/ReactiveE2E.t.sol        ✅ 3  passed
-─────────────────────────────────────────────────────────
-Total: 63 tests, all passed
-```
+Use the exact final branch or commit included with the Hookathon submission.
 
-### Frontend Demo UI
+### 2. Install frontend dependencies
 
 ```bash
 cd frontend
-npm install
+npm ci
+```
+
+### 3. Start the console
+
+```bash
 npm run dev
-# Open http://localhost:5173
 ```
 
-### Lit Protocol Redemption Gate
+Open [`http://localhost:5173`](http://localhost:5173).
+
+> [!TIP]
+> No username, password, wallet, private key, API key, or RPC credential is
+> required for the deterministic local demo.
+
+## Using the Settlement Console
+
+1. Click <kbd>Load demo orders</kbd>.
+2. Confirm that two opposite orders appear as parked.
+3. Confirm that the displayed pool price and tick remain unchanged.
+4. Click <kbd>Close batch</kbd>.
+5. Click <kbd>Submit solution</kbd>.
+6. Compare direct-match volume with residual volume.
+7. Confirm that unresolved PoolManager deltas equal zero.
+8. Click the dynamic claim control, shown by the default fixture as
+   <kbd>Claim 4 WETH</kbd>.
+9. Reset the console and select <kbd>Perfect CoW</kbd>.
+10. Repeat the flow and confirm 100% direct matching, zero residual volume, and
+    no pool price or tick movement.
+
+> [!NOTE]
+> **Load demo orders** creates deterministic local fixture data. It does not
+> place live user orders or broadcast transactions. The Solidity test suite
+> verifies hook behavior separately.
+
+### Recovery previews
+
+| State | URL |
+| --- | --- |
+| Disconnected | `http://localhost:5173/?preview=disconnected` |
+| Wrong network | `http://localhost:5173/?preview=wrong-network` |
+| Data unavailable | `http://localhost:5173/?preview=unavailable` |
+| Claim error | `http://localhost:5173/?preview=claim-error` |
+
+## Verification
+
+Run all checks from the exact commit used for the video and final submission.
+
+<details open>
+<summary><strong>Smart-contract verification</strong></summary>
 
 ```bash
-cd integrations/lit-protocol
-npm install
-
-# Check redemption eligibility (read-only)
-npx ts-node redeem-with-lit.ts \
-  --currency 0xYourToken \
-  --amount 1000000000000000000 \
-  --check-only
-
-# Execute Lit-gated redemption (signs via PKP if eligible)
-npx ts-node redeem-with-lit.ts \
-  --currency 0xYourToken \
-  --amount 1000000000000000000
+forge fmt --check
+forge build --sizes
+forge test --match-contract DeployAuraTest -vv
+forge test -vv
 ```
 
-### Deploy to Unichain Sepolia
+The latest reviewed local tree reported:
+
+| Check | Reported result |
+| --- | ---: |
+| Solidity tests | `211 passed, 0 failed` |
+| Documented RPC-dependent skips | `8` |
+| Optimized `AuraHook` runtime | `21,716 bytes` |
+| EIP-170 margin | `2,860 bytes` |
+
+</details>
+
+<details>
+<summary><strong>Frontend verification</strong></summary>
 
 ```bash
-export UNICHAIN_SEPOLIA_RPC="https://sepolia.unichain.org"
-export PRIVATE_KEY="0x..."
-export OWNER="0x..."
-
-forge script script/DeployUnichain.s.sol \
-  --rpc-url $UNICHAIN_SEPOLIA_RPC \
-  --private-key $PRIVATE_KEY \
-  --broadcast \
-  --verify
+cd frontend
+npm ci
+npm run format:check
+npm run lint
+npm run typecheck
+npm test
+npm run build
 ```
 
+</details>
+
+> [!CAUTION]
+> The reported numbers are local evidence. Rerun every command at the final
+> submission commit and update the table if the observed results change. Do not
+> reuse an earlier run as exact-head evidence.
+
+## Security model
+
+| Property | Enforcement |
+| --- | --- |
+| Authenticated order ownership | Router binds the owner to the actual caller |
+| Bounded state | Active batch capacity is limited to four orders |
+| Frozen settlement domain | Membership cannot change after closure |
+| Canonical price | Derived from the frozen feasible interval |
+| Restricted execution | No arbitrary external call plan is accepted |
+| Residual limit | Maximum of one exact-input pool swap |
+| Delta discipline | PoolManager deltas must resolve before return |
+| Backed liabilities | Claims and dust reconcile with hook-owned backing |
+| Replay resistance | Used solution hashes cannot settle again |
+| Claim safety | Failed recipient transfers do not consume claims |
+| Recovery | Unsettled owners retain a permissionless timeout refund |
+| Deployment guard | Preflight rejects an already initialized final pool |
+
+## Partner integrations
+
+> [!IMPORTANT]
+> **No Hookathon prize-track partner integrations are included in the judged
+> Aura build.**
+
+Aura uses Uniswap v4 as its protocol foundation and OpenZeppelin Uniswap Hooks
+as an open-source development dependency. Relevant implementation locations:
+
+- [`src/AuraHook.sol`](./src/AuraHook.sol)
+- [`src/AuraRouter.sol`](./src/AuraRouter.sol)
+- [`src/AuraSettlementVerifier.sol`](./src/AuraSettlementVerifier.sol)
+- [`src/libraries/AuraClearingMath.sol`](./src/libraries/AuraClearingMath.sol)
+
+No absent, theoretical, or unimplemented integration should be selected on the
+Hookathon submission form.
+
+## New work for this Hookathon
+
+Aura is a new bounded-settlement implementation seeded from earlier repository
+history. The judged work includes:
+
+| Area | New Aura work |
+| --- | --- |
+| Core hook | Bounded order, settlement, claim, dust, and refund state machine |
+| Router | Authenticated user entry and immutable-pool enforcement |
+| Verification | Frozen-state solution reconstruction and validation |
+| Mathematics | Canonical clearing price, payouts, matching, residual, and conservation bounds |
+| Testing | Unit, fuzz, integration, regression, and invariant coverage |
+| Interface | Responsive Aura Settlement Console and typed local data source |
+| Operations | Fail-closed deployment-preflight safeguards |
+| Documentation | Aura design, security, demo, and evidence package |
+
+Historical Argos code is not part of the judged Aura implementation and must
+not be presented as current Aura functionality.
+
+## Challenges and lessons
+
+<details>
+<summary><strong>Keeping the hook below the contract-size limit</strong></summary>
+
+Settlement validation, claims, accounting, and recovery create significant
+bytecode pressure. Aura separates pure clearing math and frozen-state
+verification from the core hook while preserving the hook as the final
+authority.
+
+</details>
+
+<details>
+<summary><strong>Making settlement deterministic</strong></summary>
+
+A batch system becomes difficult to audit when an external actor can choose its
+price or membership. Aura freezes the batch and derives its canonical price
+from on-chain constraints.
+
+</details>
+
+<details>
+<summary><strong>Protecting recovery</strong></summary>
+
+Off-chain services can become unavailable. Aura keeps the refund boundary
+inside the protocol so an unavailable publisher cannot permanently trap
+unsettled input.
+
+</details>
+
+<details>
+<summary><strong>Separating interface from proof</strong></summary>
+
+A polished console can explain the product, but it should not be mistaken for
+evidence of a live deployment. Aura labels local fixtures and traces honestly
+and relies on contract tests for protocol verification.
+
+</details>
+
+## Evidence and provenance
+
+### Final evidence package
+
+- [ ] Exact submission commit recorded.
+- [ ] Working tree clean.
+- [ ] Complete Solidity test summary captured.
+- [ ] Optimized contract sizes captured.
+- [ ] Frontend checks and production build captured.
+- [ ] Completed residual-settlement screenshot included.
+- [ ] Perfect CoW screenshot included.
+- [ ] Successful claim screenshot included.
+- [ ] Mobile screenshot included.
+- [ ] Failure-and-recovery screenshot included.
+- [ ] Public demo-video link added.
+- [ ] Repository and video tested in a signed-out browser.
+- [ ] Secret scan completed.
+
+### Provenance rule
+
+All deterministic frontend addresses, hashes, and identifiers are local fixture
+or trace evidence. They are not deployed contract addresses or public
+transaction hashes.
+
+Only genuine public-chain activity may be linked to a block explorer.
+
+## Repository map
+
+```text
+src/
+├── AuraHook.sol
+├── AuraRouter.sol
+├── AuraSettlementVerifier.sol
+├── libraries/
+│   └── AuraClearingMath.sol
+└── types/
+    └── AuraTypes.sol
+
+test/                          Unit, fuzz, integration, and invariant tests
+script/DeployAura.s.sol        Fail-closed deployment script
+frontend/                      Deterministic React Settlement Console
+docs/design.md                 Protocol specification
+docs/security.md               Threat model and verified invariants
+docs/demo-runbook.md           Three-minute presentation script
+```
+
+## Credits
+
+Aura was created by [Misty Waters](https://github.com/rainwaters11) for the
+Uniswap Hook Incubator Hookathon.
+
+The project builds on public open-source work and documentation from:
+
+- [Uniswap v4 Core](https://github.com/Uniswap/v4-core)
+- [Uniswap v4 Periphery](https://github.com/Uniswap/v4-periphery)
+- [OpenZeppelin Uniswap Hooks](https://github.com/OpenZeppelin/uniswap-hooks)
+- [Foundry](https://github.com/foundry-rs/foundry)
+- [React](https://react.dev/)
+- [Vite](https://vite.dev/)
+
+See [`NOTICE.md`](./NOTICE.md) for the repository seed reference, upstream
+influences, and dependency attribution. See [`CHANGELOG.md`](./CHANGELOG.md)
+for project history.
+
+## License
+
+Aura is available under the [MIT License](./LICENSE).
+
+Included dependencies and attributed upstream projects remain governed by
+their respective licenses and copyright notices.
+
 ---
 
-## 🔒 Security Notes
+<div align="center">
 
-| Property | Implementation |
-|---|---|
-| Minimal permissions | Only `beforeSwap` + `beforeSwapReturnDelta` — no liquidity hooks |
-| CEI pattern | `parkedClaims` decremented *before* `poolManager.unlock()` in `redeemParkedClaim()` |
-| Exact-output rejection | PARK mode only supports exact-input swaps; exact-output reverts `UnsupportedParkMode` |
-| Sensor authorization | `flagToxicAddress()` reverts `Unauthorized()` for any caller other than `reactiveSensor` |
-| Int128 bounds | `amountIn` validated against `int128` bounds before `toBeforeSwapDelta()` |
-| Dynamic fee guard | PENALIZE mode fee override only activates on pools initialized with `DYNAMIC_FEE_FLAG` |
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.30-363636?style=for-the-badge&logo=solidity&logoColor=white)](https://soliditylang.org/)
+[![Foundry](https://img.shields.io/badge/Foundry-1.7.1-f4a261?style=for-the-badge)](https://book.getfoundry.sh/)
+[![Uniswap](https://img.shields.io/badge/Uniswap-v4-ff007a?style=for-the-badge&logo=uniswap&logoColor=white)](https://docs.uniswap.org/contracts/v4/overview)
+[![License](https://img.shields.io/badge/License-MIT-2a9d8f?style=for-the-badge)](./LICENSE)
 
----
+</div>
 
-## 📝 Notes
+### Match what fits. Settle only what remains.
 
-- The demo uses a **manual trigger** for the Lit redemption flow (for reliability). In production, the full reactive path runs automatically: L1 event → Reactive RSC → cross-chain callback → `flagToxicAddress()` on Unichain.
-- The contract is **live and verified** on Unichain Sepolia — all code is inspectable on Blockscout.
-- The original v1 contracts and all 36 tests are **preserved intact** — this is a purely additive upgrade.
-- The frontend uses a **demo wallet** for display purposes. The core protocol logic — toxic detection, ERC-6909 parking, and Lit-gated redemption — is demonstrated end-to-end in the demo video and is live on Unichain Sepolia.
+**[Back to top](#aura)**
 
----
-
-*Built for [PLGenesis Frontiers of Collaboration Hackathon](https://plgenesis.devfolio.co/) — Crypto track.*  
-*Existing Code track — substantial bounty-driven upgrade with source, 63 tests, and Lit Protocol sponsor integration.*
+</div>
