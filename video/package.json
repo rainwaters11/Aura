@@ -1,0 +1,34 @@
+{
+  "name": "aura-demo-video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated Remotion workspace for the Aura UHI10 demo video.",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "compositions": "remotion compositions src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run compositions",
+    "render": "remotion render src/index.ts AuraDemo out/aura-demo.mp4 --props=props.local.json",
+    "render:intro": "remotion render src/index.ts AuraIntro out/01-aura-intro.mp4",
+    "render:problem": "remotion render src/index.ts AuraProblem out/02-aura-problem.mp4",
+    "render:architecture": "remotion render src/index.ts AuraArchitecture out/03-aura-architecture.mp4",
+    "render:evidence": "remotion render src/index.ts AuraEvidence out/05-aura-evidence.mp4",
+    "render:impact": "remotion render src/index.ts AuraImpact out/06-aura-impact.mp4",
+    "render:closing": "remotion render src/index.ts AuraClosing out/07-aura-closing.mp4",
+    "render:clips": "npm run render:intro && npm run render:problem && npm run render:architecture && npm run render:evidence && npm run render:impact && npm run render:closing"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.520",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "remotion": "4.0.520"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=22.22.2"
+  }
+}

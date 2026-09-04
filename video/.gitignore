@@ -1,0 +1,8 @@
+node_modules/
+out/
+props.local.json
+public/clips/*.mp4
+public/clips/*.webm
+public/voiceover/*.wav
+public/voiceover/*.mp3
+*.log
