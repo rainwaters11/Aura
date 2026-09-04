@@ -309,17 +309,20 @@ when the deployer's raw factory transaction reverts. That failed transaction
 consumes one deployer nonce. A fresh script run may accept exactly that one
 additional nonce only when the verifier, router, and hook already exist, the hook
 has passed the approved runtime, address, flag, PoolId, and immutable checks, and
-the typed manifest contains the exact operator-reviewed hash of the reverted
+the typed manifest contains the exact hash of the reverted
 deployer factory transaction in `AURA_REVIEWED_CREATE2_FAILURE_TX_HASH`. Before
-approving that recovery manifest, retrieve the public receipt and confirm its
-status is failed, its sender is the approved deployer, its nonce is starting
-nonce plus two, its target is the approved CREATE2 factory, and its input is the
-approved salt concatenated with the approved hook initcode. This review is the
-explicit evidence that the nonce was consumed by the factory race rather than
-unrelated wallet activity. The recovery run then records only the
-authority-gated initialization transaction. Missing evidence, mismatched hook
-code, or any additional nonce drift remains a hard stop. A normal/fresh run must
-keep the recovery hash zero so stale recovery approval cannot be reused.
+accepting recovery, the script uses `cast rpc` through Foundry FFI and the
+repository's `unichain_sepolia` alias to retrieve the public transaction and
+receipt from chain 1301. It requires the configured transaction hash, matching
+mined block identity, failed receipt status, approved deployer, nonce starting
+plus two, approved CREATE2 factory, and exact approved salt concatenated with
+the approved hook initcode. These executable checks prove the nonce was consumed
+by the factory race rather than unrelated wallet activity; operator review is
+additional evidence only. The recovery run then records only the authority-gated
+initialization transaction. Missing/stale evidence, RPC or JSON failure, any
+transaction/receipt field mismatch, mismatched hook code, or additional nonce
+drift remains a hard stop. A normal/fresh run must keep the recovery hash zero so
+stale recovery approval cannot be reused.
 
 Immediately before any separately approved future pool-initialization
 transaction, read the final PoolId's PoolManager `slot0` again and stop if its
@@ -336,8 +339,9 @@ There is no on-chain rollback for immutable deployments. Failure recovery is:
 4. if the router succeeds and the deployer's factory transaction fails, rerun
    the read-only preflight; continue only when the exact approved hook exists,
    the nonce is exactly one above the verifier/router deployment nonce, and the
-   manifest names the reviewed failed factory transaction whose receipt matches
-   the approved sender, nonce, target, status, salt, and hook initcode;
+   manifest names the failed factory transaction that the script retrieves and
+   validates against the approved chain, sender, nonce, target, failed status,
+   mined block, salt, and hook initcode;
 5. if no exact hook exists, the nonce differs by any other amount, or any
    immutable/code/flag check fails, quarantine every
    address and prepare a new reviewed manifest and salt;

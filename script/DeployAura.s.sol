@@ -19,6 +19,26 @@ import {IAuraRouter} from "../src/interfaces/IAuraRouter.sol";
 import {IAuraSettlementVerifier} from "../src/interfaces/IAuraSettlementVerifier.sol";
 import {AuraDeploymentConfig} from "./config/AuraDeploymentConfig.sol";
 
+struct Create2RecoveryTransaction {
+    bytes32 transactionHash;
+    bytes32 blockHash;
+    uint256 blockNumber;
+    uint256 chainId;
+    address sender;
+    uint256 nonce;
+    address target;
+    bytes input;
+}
+
+struct Create2RecoveryReceipt {
+    bytes32 transactionHash;
+    bytes32 blockHash;
+    uint256 blockNumber;
+    address sender;
+    address target;
+    uint256 status;
+}
+
 /// @notice Mines and deploys the three-contract Aura Core.
 /// @dev The CREATE2 factory accepts calldata `salt || initcode`, as used by the
 ///      deterministic deployment proxy at 0x4e59...956C.
@@ -56,6 +76,8 @@ contract DeployAura is Script {
     error NonceDrift(uint64 expected, uint64 actual);
     error MissingCreate2RecoveryEvidence();
     error UnexpectedCreate2RecoveryEvidence(bytes32 transactionHash);
+    error InvalidCreate2RecoveryTransaction(bytes32 transactionHash);
+    error InvalidCreate2RecoveryReceipt(bytes32 transactionHash);
     error AddressMismatch(address expected, address actual);
     error HookPermissionMismatch(address hook);
     error Create2DeploymentFailed();
@@ -172,7 +194,6 @@ contract DeployAura is Script {
 
     function validatePreflight(AuraDeploymentConfig memory config)
         public
-        view
         returns (PoolKey memory key, bool verifierAlreadyDeployed, bool routerAlreadyDeployed, bool hookAlreadyDeployed)
     {
         if (block.chainid != UNICHAIN_SEPOLIA_CHAIN_ID || config.chainId != UNICHAIN_SEPOLIA_CHAIN_ID) {
@@ -377,7 +398,6 @@ contract DeployAura is Script {
 
     function _requireDeploymentNonce(AuraDeploymentConfig memory config, uint64 expected, bool exactHookAlreadyDeployed)
         internal
-        view
     {
         uint64 actual = vm.getNonce(config.deployer);
         if (actual == expected) {
@@ -392,15 +412,78 @@ contract DeployAura is Script {
         // transaction. The deployer's raw factory call then reverts and consumes
         // exactly one nonce. A rerun may continue to guarded initialization only
         // after the existing hook passed every code, address, flag, and immutable
-        // check above and the manifest names the operator-reviewed failed factory
-        // transaction. No unrelated wallet activity or other nonce drift is
-        // accepted as implicit recovery evidence.
+        // check above and the manifest names the failed factory transaction.
+        // The transaction and receipt are fetched from the configured chain and
+        // bound to the sender, nonce, factory, calldata, mined block, and failed
+        // status before recovery is accepted. No unrelated wallet activity or
+        // other nonce drift is accepted as implicit recovery evidence.
         if (exactHookAlreadyDeployed && expected != type(uint64).max && actual == expected + 1) {
             if (config.reviewedCreate2FailureTxHash == bytes32(0)) revert MissingCreate2RecoveryEvidence();
+            _requireCreate2RecoveryEvidence(config, expected);
             return;
         }
 
         revert NonceDrift(expected, actual);
+    }
+
+    function _requireCreate2RecoveryEvidence(AuraDeploymentConfig memory config, uint64 expectedNonce) internal {
+        bytes32 reviewedHash = config.reviewedCreate2FailureTxHash;
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _loadCreate2RecoveryEvidence(reviewedHash);
+
+        bytes32 expectedInputHash = keccak256(abi.encodePacked(config.hookSalt, hookInitcode(config)));
+        if (
+            transaction.transactionHash != reviewedHash || transaction.blockHash == bytes32(0)
+                || transaction.blockNumber == 0 || transaction.chainId != config.chainId
+                || transaction.sender != config.deployer || transaction.nonce != expectedNonce
+                || transaction.target != config.create2Factory || keccak256(transaction.input) != expectedInputHash
+        ) revert InvalidCreate2RecoveryTransaction(reviewedHash);
+
+        if (
+            receipt.transactionHash != reviewedHash || receipt.blockHash == bytes32(0)
+                || receipt.blockHash != transaction.blockHash || receipt.blockNumber == 0
+                || receipt.blockNumber != transaction.blockNumber || receipt.sender != config.deployer
+                || receipt.target != config.create2Factory || receipt.status != 0
+        ) revert InvalidCreate2RecoveryReceipt(reviewedHash);
+    }
+
+    function _loadCreate2RecoveryEvidence(bytes32 transactionHash)
+        internal
+        virtual
+        returns (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt)
+    {
+        string memory transactionJson = _castRpc("eth_getTransactionByHash", transactionHash);
+        string memory receiptJson = _castRpc("eth_getTransactionReceipt", transactionHash);
+
+        transaction = Create2RecoveryTransaction({
+            transactionHash: vm.parseJsonBytes32(transactionJson, ".hash"),
+            blockHash: vm.parseJsonBytes32(transactionJson, ".blockHash"),
+            blockNumber: vm.parseJsonUint(transactionJson, ".blockNumber"),
+            chainId: vm.parseJsonUint(transactionJson, ".chainId"),
+            sender: vm.parseJsonAddress(transactionJson, ".from"),
+            nonce: vm.parseJsonUint(transactionJson, ".nonce"),
+            target: vm.parseJsonAddress(transactionJson, ".to"),
+            input: vm.parseJsonBytes(transactionJson, ".input")
+        });
+        receipt = Create2RecoveryReceipt({
+            transactionHash: vm.parseJsonBytes32(receiptJson, ".transactionHash"),
+            blockHash: vm.parseJsonBytes32(receiptJson, ".blockHash"),
+            blockNumber: vm.parseJsonUint(receiptJson, ".blockNumber"),
+            sender: vm.parseJsonAddress(receiptJson, ".from"),
+            target: vm.parseJsonAddress(receiptJson, ".to"),
+            status: vm.parseJsonUint(receiptJson, ".status")
+        });
+    }
+
+    function _castRpc(string memory method, bytes32 transactionHash) internal virtual returns (string memory) {
+        string[] memory command = new string[](6);
+        command[0] = "cast";
+        command[1] = "rpc";
+        command[2] = "--rpc-url";
+        command[3] = "unichain_sepolia";
+        command[4] = method;
+        command[5] = vm.toString(transactionHash);
+        return string(vm.ffi(command));
     }
 
     function _requireCreationCodeHash(bytes32 artifact, bytes32 expected, bytes32 actual) internal pure {

@@ -9,7 +9,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
-import {DeployAura} from "../script/DeployAura.s.sol";
+import {Create2RecoveryReceipt, Create2RecoveryTransaction, DeployAura} from "../script/DeployAura.s.sol";
 import {AuraDeploymentConfig} from "../script/config/AuraDeploymentConfig.sol";
 import {AuraHook} from "../src/AuraHook.sol";
 import {AuraRouter} from "../src/AuraRouter.sol";
@@ -48,6 +48,9 @@ contract PoolManagerSlot0Mock {
 
 contract DeployAuraHarness is DeployAura {
     AuraDeploymentConfig private configOverride;
+    Create2RecoveryTransaction private recoveryTransactionOverride;
+    Create2RecoveryReceipt private recoveryReceiptOverride;
+    bool private hasRecoveryEvidenceOverride;
 
     function setConfig(AuraDeploymentConfig memory config_) external {
         configOverride = config_;
@@ -55,6 +58,39 @@ contract DeployAuraHarness is DeployAura {
 
     function loadConfig() public view override returns (AuraDeploymentConfig memory) {
         return configOverride;
+    }
+
+    function setRecoveryEvidence(Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt)
+        external
+    {
+        recoveryTransactionOverride = transaction;
+        recoveryReceiptOverride = receipt;
+        hasRecoveryEvidenceOverride = true;
+    }
+
+    function _castRpc(string memory method, bytes32) internal override returns (string memory) {
+        require(hasRecoveryEvidenceOverride, "missing recovery fixture");
+        if (keccak256(bytes(method)) == keccak256("eth_getTransactionByHash")) {
+            string memory objectKey = "recovery-transaction";
+            vm.serializeBytes32(objectKey, "hash", recoveryTransactionOverride.transactionHash);
+            vm.serializeBytes32(objectKey, "blockHash", recoveryTransactionOverride.blockHash);
+            vm.serializeUint(objectKey, "blockNumber", recoveryTransactionOverride.blockNumber);
+            vm.serializeUint(objectKey, "chainId", recoveryTransactionOverride.chainId);
+            vm.serializeAddress(objectKey, "from", recoveryTransactionOverride.sender);
+            vm.serializeUint(objectKey, "nonce", recoveryTransactionOverride.nonce);
+            vm.serializeAddress(objectKey, "to", recoveryTransactionOverride.target);
+            return vm.serializeBytes(objectKey, "input", recoveryTransactionOverride.input);
+        }
+        if (keccak256(bytes(method)) == keccak256("eth_getTransactionReceipt")) {
+            string memory objectKey = "recovery-receipt";
+            vm.serializeBytes32(objectKey, "transactionHash", recoveryReceiptOverride.transactionHash);
+            vm.serializeBytes32(objectKey, "blockHash", recoveryReceiptOverride.blockHash);
+            vm.serializeUint(objectKey, "blockNumber", recoveryReceiptOverride.blockNumber);
+            vm.serializeAddress(objectKey, "from", recoveryReceiptOverride.sender);
+            vm.serializeAddress(objectKey, "to", recoveryReceiptOverride.target);
+            return vm.serializeUint(objectKey, "status", recoveryReceiptOverride.status);
+        }
+        revert("unexpected RPC method");
     }
 }
 
@@ -156,7 +192,7 @@ contract DeployAuraTest is Test {
         assertEq(PoolManagerSlot0Mock(config.poolManager).lastInitializedSqrtPriceX96(), config.initialSqrtPriceX96);
     }
 
-    function test_uninitializedPredictedPoolIdPassesPreflight() public view {
+    function test_uninitializedPredictedPoolIdPassesPreflight() public {
         (PoolKey memory key,,,) = script.validatePreflight(config);
         assertEq(PoolId.unwrap(key.toId()), PoolId.unwrap(script.auraPoolKey(config).toId()));
     }
@@ -253,6 +289,9 @@ contract DeployAuraTest is Test {
         // nonce before `--slow` stopped the original broadcast.
         vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
         config.reviewedCreate2FailureTxHash = keccak256("reviewed failed CREATE2 transaction");
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _validRecoveryEvidence(config.reviewedCreate2FailureTxHash);
+        runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
         (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) = runner.run();
@@ -262,6 +301,97 @@ contract DeployAuraTest is Test {
         assertEq(address(hook), config.minedHook);
         assertTrue(hook.auraPoolInitialized());
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
+    }
+
+    function test_recoveryRejectsTransactionFromUnrelatedSender() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareRecoveryEvidence();
+        transaction.sender = makeAddr("unrelated sender");
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
+    }
+
+    function test_recoveryRejectsTransactionAtWrongNonce() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareRecoveryEvidence();
+        transaction.nonce = STARTING_NONCE + 1;
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
+    }
+
+    function test_recoveryRejectsTransactionToWrongTarget() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareRecoveryEvidence();
+        transaction.target = makeAddr("wrong factory");
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
+    }
+
+    function test_recoveryRejectsWrongSaltOrHookInitcode() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareRecoveryEvidence();
+        transaction.input[0] ^= bytes1(uint8(1));
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
+    }
+
+    function test_recoveryRejectsSuccessfulFactoryReceipt() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareRecoveryEvidence();
+        receipt.status = 1;
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidCreate2RecoveryReceipt.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
+    }
+
+    function test_recoveryRejectsReceiptFromAnotherTransactionOrBlock() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareRecoveryEvidence();
+        receipt.transactionHash = keccak256("different transaction");
+        receipt.blockHash = keccak256("different block");
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidCreate2RecoveryReceipt.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
     }
 
     function test_identicalFactoryFrontRunRecoveryRequiresReviewedFailureTransaction() public {
@@ -610,6 +740,43 @@ contract DeployAuraTest is Test {
         assertEq(address(hook).codehash, config.hookRuntimeCodeHash);
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
         assertFalse(hook.auraPoolInitialized());
+    }
+
+    function _prepareRecoveryEvidence()
+        internal
+        returns (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt)
+    {
+        _deployCoreWithoutInitialization();
+        vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
+        config.reviewedCreate2FailureTxHash = keccak256("reviewed failed CREATE2 transaction");
+        return _validRecoveryEvidence(config.reviewedCreate2FailureTxHash);
+    }
+
+    function _validRecoveryEvidence(bytes32 transactionHash)
+        internal
+        view
+        returns (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt)
+    {
+        bytes32 blockHash = keccak256("reviewed recovery block");
+        uint256 blockNumber = 1_301;
+        transaction = Create2RecoveryTransaction({
+            transactionHash: transactionHash,
+            blockHash: blockHash,
+            blockNumber: blockNumber,
+            chainId: config.chainId,
+            sender: config.deployer,
+            nonce: config.deployerStartingNonce + 2,
+            target: config.create2Factory,
+            input: abi.encodePacked(config.hookSalt, script.hookInitcode(config))
+        });
+        receipt = Create2RecoveryReceipt({
+            transactionHash: transactionHash,
+            blockHash: blockHash,
+            blockNumber: blockNumber,
+            sender: config.deployer,
+            target: config.create2Factory,
+            status: 0
+        });
     }
 
     function _deriveRuntimeCodeHashes(AuraDeploymentConfig memory cfg)

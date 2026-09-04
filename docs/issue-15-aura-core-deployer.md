@@ -185,6 +185,13 @@ is verifier CREATE, router CREATE, then CREATE2-factory call, then one
 `PoolManager.initialize` call from the approved initialization authority at the
 approved initial price.
 
+The recovery-only path uses Foundry's enabled FFI support to run `cast rpc`
+against the repository's `unichain_sepolia` RPC alias, which is backed by the
+same `UNICHAIN_SEPOLIA_RPC` environment value. This retrieves the named public
+transaction and receipt for fail-closed validation. `cast` ships with Foundry;
+an unavailable executable, RPC failure, missing transaction, or malformed field
+causes preflight to stop rather than accepting recovery.
+
 For verification rehearsal, constructor arguments are exactly:
 
 ```text
@@ -215,13 +222,15 @@ simulation and the deployer's factory transaction, `--slow` stops after the
 deployer's raw factory transaction reverts and consumes one nonce. A new
 read-only preflight may accept exactly that one additional nonce only after the
 verifier, router, and existing hook pass all approved code, address, flag,
-PoolId, and immutable checks and the typed manifest names the exact
-operator-reviewed failed factory transaction. Its public receipt must prove the
-approved deployer, starting nonce plus two, approved CREATE2 factory, failed
-status, and approved `salt || hook initcode` input. The recovery run then records
-only the guarded initialization. A fresh run requires a zero recovery hash;
-missing evidence, mismatched hook code, or any further nonce drift quarantines
-the entire tuple.
+PoolId, and immutable checks and the typed manifest names the exact failed
+factory transaction. The script retrieves that transaction and receipt from
+chain 1301 and requires matching transaction/receipt hashes and blocks, a mined
+failed status, chain 1301, the approved deployer, nonce `starting + 2`, the
+approved CREATE2 factory, and exact `salt || hook initcode` input. Operator
+review remains an additional check, not the trust boundary. The recovery run
+then records only the guarded initialization. A fresh run requires a zero
+recovery hash; missing or stale evidence, RPC/JSON failure, any field mismatch,
+mismatched hook code, or any further nonce drift quarantines the entire tuple.
 Repository rollback is a revert of this deployment-package commit; immutable
 on-chain contracts have no destructive rollback.
 
