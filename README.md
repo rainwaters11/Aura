@@ -361,7 +361,7 @@ broadcast, pool initialization, or funds.
 | --- | --- |
 | Git | Current stable release |
 | Foundry | `1.7.1` |
-| Node.js | `>=22.22.2` |
+| Node.js | `^22.22.2`, `^24.15.0`, or `>=26.0.0` |
 | npm | Included with supported Node.js |
 
 ### 1. Clone the repository

@@ -1,7 +1,7 @@
 # Aura Protocol and System Architecture
 
 Status: normative MVP specification  
-Version: 1.7  
+Version: 1.8  
 Baseline: `rainwaters11/Argos_LTS@4603269e8af7dbbff6e337546fd9d7be27deb34c`  
 Target: Unichain Sepolia, chain ID 1301  
 Compiler: Solidity 0.8.30, Cancun EVM
@@ -77,7 +77,34 @@ beforeSwapReturnDelta: true
 
 All other hook permission flags are false. Deployment must mine an address whose low bits match those flags and tests must compare the deployed address with `Hooks.validateHookPermissions` behavior.
 
-### 4.2 Order entry and identity
+### 4.2 Pool initialization
+
+`AuraHook` is constructed with one immutable initialization authority and one
+approved initial square-root price. The constructor also derives and stores the
+only permitted Aura `PoolKey` and `PoolId` from the immutable currencies, fee,
+tick spacing, and hook address.
+
+Pool initialization must occur through `PoolManager.initialize` after the exact
+hook has been deployed. `beforeInitialize` accepts the call only when all of the
+following hold:
+
+1. the original initialization sender equals the immutable initialization
+   authority;
+2. currency0, currency1, fee, tick spacing, hook address, and derived PoolId
+   equal Aura's immutable pool tuple;
+3. `sqrtPriceX96` equals the immutable approved initial price;
+4. Aura's one-time initialization flag is false; and
+5. PoolManager `slot0` for the immutable PoolId is still uninitialized.
+
+The hook marks its one-time flag inside the authenticated callback. Any later
+initialization attempt, alternate sender, alternate PoolKey, alternate price, or
+preinitialized PoolId reverts. Because the flag update and PoolManager
+initialization share one transaction, a failed initialization rolls the flag
+back atomically. Deployment recovery may resume this exact initialization only
+after the existing hook and its complete immutable deployment evidence pass the
+fail-closed recovery gate; it may not substitute a different pool or price.
+
+### 4.3 Order entry and identity
 
 Users do not call the hook directly. They call `AuraRouter.placeOrder`.
 
@@ -93,7 +120,7 @@ The hook requires `sender == address(auraRouter)`. An address decoded from `hook
 
 `AuraOrderData.deadline` and `BatchSolution.deadline` are Unix timestamps in seconds. An order or solution is valid while `block.timestamp <= deadline` and expired only when `block.timestamp > deadline`. `MIN_ORDER_LIFETIME_SECONDS = 13 hours`; parking additionally requires `order.deadline >= block.timestamp + MIN_ORDER_LIFETIME_SECONDS`. Batch intake, close, and dispatcher retry counters use their separately specified block or timestamp clocks; implementations must never compare a Unix deadline with `block.number`. Before closure, every frozen order must still satisfy `order.deadline >= closedAtTimestamp + MAX_FINALITY_LAG_SECONDS + SETTLEMENT_GRACE_SECONDS`, ensuring no closed batch contains an order guaranteed to expire before its settlement/refund boundary.
 
-### 4.3 `_beforeSwap` interception
+### 4.4 `_beforeSwap` interception
 
 For `params.amountSpecified < 0`:
 
@@ -116,7 +143,7 @@ The returned delta nets the user's specified input out of the normal swap path, 
 
 For `params.amountSpecified >= 0`, Aura does not park the order. Exact-output behavior follows the inherited base behavior and must not create Aura order state.
 
-### 4.4 Batch formation
+### 4.5 Batch formation
 
 - The first eligible order opens the next sequential batch and records `openedAtBlock`.
 - A batch becomes `READY` only when it contains at least one order in each direction and at least two total orders.
@@ -127,7 +154,7 @@ For `params.amountSpecified >= 0`, Aura does not park the order. Exact-output be
 - `BatchClosed` commits `keccak256(abi.encode(batchOrderIds[batchId]))` in frozen stored order. Duplicate detection must not reorder the array. `BatchReady` is only an early eligibility signal and never authorizes dispatch or settlement. `referenceSqrtPriceX96` remains optional telemetry for price-drift observability and is never an input to canonical clearing-price selection, payout computation, solution hashing, or settlement validation.
 - A closed two-sided batch cannot become refundable until the settlement grace boundary defined in Section 10. The refund entrypoint cannot skip `CLOSED` or race the same boundary used to close a `READY` batch.
 
-### 4.5 Settlement entry
+### 4.6 Settlement entry
 
 The destination entrypoint is conceptually:
 
@@ -145,7 +172,7 @@ It requires:
 
 After validation, it marks the batch `SETTLING` and calls `poolManager.unlock` with an action-tagged payload. A revert rolls back all status and accounting changes atomically.
 
-### 4.6 Unlock callback routing
+### 4.7 Unlock callback routing
 
 `unlockCallback(bytes calldata rawData)` accepts calls only from `PoolManager` and only while an internal unlock context is active. The payload begins with an `UnlockAction` discriminator:
 
@@ -594,6 +621,7 @@ The following properties must hold in tests and production:
 16. **No trapped funds:** every parked order eventually becomes settled and claimable or refundable. A preflight-valid `CLOSED` batch cannot become refundable until the fixed finality buffer and post-finality settlement grace have elapsed; a one-sided or failed-preflight timeout closure becomes immediately `REFUNDABLE` without `BatchClosed`.
 17. **No arbitrary interaction:** a builder or dispatcher cannot select arbitrary targets, calldata, pools, currencies, or recipients.
 18. **External-service independence:** the solution builder, inbox, RPC, Reactive transport, Circle, Arc, Chainalysis, indexers, and frontend services can fail without blocking on-chain validation, claims, or timeout refunds.
+19. **Initialization authority and price:** the immutable Aura pool initializes at most once, only through the configured authority, exact PoolKey and PoolId, and approved initial square-root price; an already initialized PoolManager slot or any alternate tuple reverts atomically.
 
 ## 13. Required verification
 
@@ -606,6 +634,7 @@ At minimum, the implementation must provide:
 - Both residual directions with only the residual touching the pool, plus fork parity between the production builder quote and pinned v4 execution.
 - Three same-direction orders reserving the final slot, opposite-direction admission into that slot, incompatible-price admission rejection, short-deadline admission rejection, at-cap closure-preflight revert, timeout-close direct refund without `BatchClosed` on an expired-horizon or unencodable snapshot, successful-close finality-buffer boundary, post-finality settlement grace, bounded fair callback retry across concurrent pending batches, and one-time refund cases.
 - Unauthorized router, callback proxy, RVM, PoolManager callback, and replay cases.
+- Unauthorized initialization sender, alternate PoolKey or price, repeated initialization, and preinitialized PoolId cases.
 - Remix and Slither findings recorded against an exact commit in `docs/remix-audit.md`.
 
 ## 14. Change control
