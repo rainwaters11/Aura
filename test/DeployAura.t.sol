@@ -177,9 +177,10 @@ contract DeployAuraTest is Test {
     }
 
     function test_initializationBeforeHookDeploymentFails() public {
-        vm.prank(config.initializationAuthority);
+        PoolKey memory key = script.auraPoolKey(config);
         vm.expectRevert("missing hook");
-        PoolManagerSlot0Mock(config.poolManager).initialize(script.auraPoolKey(config), config.initialSqrtPriceX96);
+        vm.prank(config.initializationAuthority);
+        PoolManagerSlot0Mock(config.poolManager).initialize(key, config.initialSqrtPriceX96);
     }
 
     function test_unauthorizedAccountCannotInitializeAfterHookDeployment() public {
@@ -198,8 +199,9 @@ contract DeployAuraTest is Test {
         assertTrue(hook.auraPoolInitialized());
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
 
+        PoolId poolId = hook.auraPoolId();
+        vm.expectRevert(abi.encodeWithSelector(AuraHook.AuraPoolAlreadyInitialized.selector, poolId));
         vm.prank(config.initializationAuthority);
-        vm.expectRevert(abi.encodeWithSelector(AuraHook.AuraPoolAlreadyInitialized.selector, hook.auraPoolId()));
         PoolManagerSlot0Mock(config.poolManager).initialize(key, config.initialSqrtPriceX96);
     }
 
@@ -234,8 +236,13 @@ contract DeployAuraTest is Test {
     function test_mismatchedExistingHookImmutablesAreRejected() public {
         _deployCoreWithoutInitialization();
         config.initialSqrtPriceX96 = config.initialSqrtPriceX96 + 1;
+        address changedHookPrediction = script.computeCreate2Address(
+            config.create2Factory, config.hookSalt, keccak256(script.hookInitcode(config))
+        );
         runner.setConfig(config);
-        vm.expectRevert(DeployAura.InvalidConfiguration.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployAura.AddressMismatch.selector, config.minedHook, changedHookPrediction)
+        );
         runner.run();
     }
 
@@ -285,9 +292,16 @@ contract DeployAuraTest is Test {
         script.validatePreflight(config);
     }
 
-    function test_rejectsOccupiedDeploymentAddress() public {
+    function test_rejectsOccupiedDeploymentAddressWithMismatchedCodeHash() public {
         vm.etch(config.verifier, hex"00");
-        vm.expectRevert(abi.encodeWithSelector(DeployAura.UnexpectedCode.selector, config.verifier));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.CodeHashMismatch.selector,
+                config.verifier,
+                config.verifierRuntimeCodeHash,
+                config.verifier.codehash
+            )
+        );
         script.validatePreflight(config);
     }
 
@@ -405,49 +419,39 @@ contract DeployAuraTest is Test {
         script.validatePreflight(config);
     }
 
-    function test_loadConfigRejectsOversizedFeeThatAliasesApprovedValue() public {
+    /// @dev `vm.setEnv` mutates process-wide state, so all environment parsing
+    ///      regressions stay in one test and run in a deterministic sequence.
+    function test_loadConfigRejectsInvalidFullWidthValues() public {
         _setEnvironment(config);
         vm.setEnv("AURA_FEE", vm.toString((uint256(1) << 24) + script.AURA_FEE()));
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsOversizedTickSpacingThatAliasesApprovedValue() public {
         _setEnvironment(config);
         vm.setEnv("AURA_TICK_SPACING", vm.toString((uint256(1) << 24) + uint24(script.AURA_TICK_SPACING())));
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsOversizedNonceThatAliasesApprovedValue() public {
         _setEnvironment(config);
         vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString((uint256(1) << 64) + config.deployerStartingNonce));
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsNonceWithoutTwoPredictionSlots() public {
         _setEnvironment(config);
         vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString(type(uint64).max - 1));
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsOversizedOptimizerRunsThatAliasesApprovedValue() public {
         _setEnvironment(config);
         vm.setEnv("AURA_OPTIMIZER_RUNS", vm.toString((uint256(1) << 32) + 200));
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsZeroInitialSqrtPrice() public {
         _setEnvironment(config);
         vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", "0");
         vm.expectRevert(abi.encodeWithSelector(DeployAura.InvalidInitialSqrtPrice.selector, 0));
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsOversizedInitialSqrtPriceThatAliasesApprovedValue() public {
         _setEnvironment(config);
         vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString((uint256(1) << 160) + uint256(config.initialSqrtPriceX96)));
         vm.expectRevert(
@@ -456,9 +460,7 @@ contract DeployAuraTest is Test {
             )
         );
         script.loadConfig();
-    }
 
-    function test_loadConfigRejectsOutOfRangeInitialSqrtPrice() public {
         _setEnvironment(config);
         vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(uint256(TickMath.MIN_SQRT_PRICE)));
         vm.expectRevert(
@@ -466,6 +468,7 @@ contract DeployAuraTest is Test {
         );
         script.loadConfig();
 
+        _setEnvironment(config);
         vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(uint256(TickMath.MAX_SQRT_PRICE)));
         vm.expectRevert(
             abi.encodeWithSelector(DeployAura.InitialSqrtPriceOutOfRange.selector, uint256(TickMath.MAX_SQRT_PRICE))

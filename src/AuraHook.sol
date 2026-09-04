@@ -103,7 +103,6 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     error InvalidInitialSqrtPriceX96(uint160 sqrtPriceX96);
     error UnauthorizedInitializationSender();
     error InvalidInitializationPoolKey();
-    error InvalidInitializationPoolId();
     error InvalidInitializationPrice(uint160 sqrtPriceX96);
     error ExactOutputUnsupported();
     error MalformedOrderData();
@@ -252,7 +251,6 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
                 || Currency.unwrap(key.currency1) != Currency.unwrap(_currency1) || key.fee != _fee
                 || key.tickSpacing != _tickSpacing || address(key.hooks) != address(this)
         ) revert InvalidInitializationPoolKey();
-        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(auraPoolId)) revert InvalidInitializationPoolId();
         if (sqrtPriceX96 != approvedInitialSqrtPriceX96) revert InvalidInitializationPrice(sqrtPriceX96);
         if (auraPoolInitialized) revert AuraPoolAlreadyInitialized(auraPoolId);
         (uint160 currentSqrtPriceX96,,,) = poolManager.getSlot0(auraPoolId);
