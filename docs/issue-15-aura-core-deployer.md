@@ -220,10 +220,11 @@ A verifier with matching verified bytecode may be reused only under a newly
 reviewed manifest. An exact hook permissionlessly predeployed before the Aura
 deployer sends its factory transaction may be reused only when the complete
 code, address, flag, PoolId, approved-price, and immutable validation passes,
-the deployer nonce remains at the approved starting value, and
+the deployer nonce remains at the expected post-verifier/router value
+(`AURA_DEPLOYER_STARTING_NONCE + 2`), and
 `AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH` is zero. No recovery transaction is
-required or permitted for this no-nonce-drift state because the deployer did
-not send one.
+required or permitted for this no-drift state because the deployer did not send
+the factory transaction.
 
 A `--slow` broadcast can consume exactly one factory nonce
 before initialization in either of two audited states: an identical
