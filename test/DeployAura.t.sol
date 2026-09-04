@@ -133,7 +133,7 @@ contract DeployAuraTest is Test {
             initialSqrtPriceX96: INITIAL_SQRT_PRICE_X96,
             deployer: DEPLOYER,
             deployerStartingNonce: STARTING_NONCE,
-            reviewedCreate2FailureTxHash: bytes32(0),
+            reviewedCreate2RecoveryTxHash: bytes32(0),
             create2Factory: script.DETERMINISTIC_DEPLOYMENT_PROXY(),
             verifier: vm.computeCreateAddress(DEPLOYER, STARTING_NONCE),
             predictedRouter: vm.computeCreateAddress(DEPLOYER, STARTING_NONCE + 1),
@@ -288,9 +288,9 @@ contract DeployAuraTest is Test {
         // The deployer's subsequently reverted factory transaction consumed its
         // nonce before `--slow` stopped the original broadcast.
         vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
-        config.reviewedCreate2FailureTxHash = keccak256("reviewed failed CREATE2 transaction");
+        config.reviewedCreate2RecoveryTxHash = keccak256("reviewed failed CREATE2 transaction");
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _validRecoveryEvidence(config.reviewedCreate2FailureTxHash);
+            _validRecoveryEvidence(config.reviewedCreate2RecoveryTxHash);
         runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
@@ -305,14 +305,14 @@ contract DeployAuraTest is Test {
 
     function test_recoveryRejectsTransactionFromUnrelatedSender() public {
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _prepareRecoveryEvidence();
+            _prepareSuccessfulRecoveryEvidence();
         transaction.sender = makeAddr("unrelated sender");
         runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
@@ -320,14 +320,14 @@ contract DeployAuraTest is Test {
 
     function test_recoveryRejectsTransactionAtWrongNonce() public {
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _prepareRecoveryEvidence();
+            _prepareSuccessfulRecoveryEvidence();
         transaction.nonce = STARTING_NONCE + 1;
         runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
@@ -335,14 +335,14 @@ contract DeployAuraTest is Test {
 
     function test_recoveryRejectsTransactionToWrongTarget() public {
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _prepareRecoveryEvidence();
+            _prepareSuccessfulRecoveryEvidence();
         transaction.target = makeAddr("wrong factory");
         runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
@@ -350,29 +350,44 @@ contract DeployAuraTest is Test {
 
     function test_recoveryRejectsWrongSaltOrHookInitcode() public {
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _prepareRecoveryEvidence();
+            _prepareSuccessfulRecoveryEvidence();
         transaction.input[0] ^= bytes1(uint8(1));
         runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.InvalidCreate2RecoveryTransaction.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
     }
 
-    function test_recoveryRejectsSuccessfulFactoryReceipt() public {
+    function test_successfulFactoryReceiptResumesInitialization() public {
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _prepareRecoveryEvidence();
-        receipt.status = 1;
+            _prepareSuccessfulRecoveryEvidence();
+        runner.setRecoveryEvidence(transaction, receipt);
+        runner.setConfig(config);
+
+        (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) = runner.run();
+
+        assertEq(address(verifier), config.verifier);
+        assertEq(address(router), config.predictedRouter);
+        assertEq(address(hook), config.minedHook);
+        assertTrue(hook.auraPoolInitialized());
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
+    }
+
+    function test_recoveryRejectsNoncanonicalFactoryReceiptStatus() public {
+        (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
+            _prepareSuccessfulRecoveryEvidence();
+        receipt.status = 2;
         runner.setRecoveryEvidence(transaction, receipt);
         runner.setConfig(config);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.InvalidCreate2RecoveryReceipt.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.InvalidCreate2RecoveryReceipt.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
@@ -380,7 +395,7 @@ contract DeployAuraTest is Test {
 
     function test_recoveryRejectsReceiptFromAnotherTransactionOrBlock() public {
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
-            _prepareRecoveryEvidence();
+            _prepareSuccessfulRecoveryEvidence();
         receipt.transactionHash = keccak256("different transaction");
         receipt.blockHash = keccak256("different block");
         runner.setRecoveryEvidence(transaction, receipt);
@@ -388,13 +403,13 @@ contract DeployAuraTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.InvalidCreate2RecoveryReceipt.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.InvalidCreate2RecoveryReceipt.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
     }
 
-    function test_identicalFactoryFrontRunRecoveryRequiresReviewedFailureTransaction() public {
+    function test_recoveryRequiresReviewedFactoryTransaction() public {
         _deployCoreWithoutInitialization();
         vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
         runner.setConfig(config);
@@ -404,12 +419,12 @@ contract DeployAuraTest is Test {
     }
 
     function test_freshDeploymentRejectsStaleCreate2RecoveryEvidence() public {
-        config.reviewedCreate2FailureTxHash = keccak256("stale failed CREATE2 transaction");
+        config.reviewedCreate2RecoveryTxHash = keccak256("stale CREATE2 recovery transaction");
         runner.setConfig(config);
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                DeployAura.UnexpectedCreate2RecoveryEvidence.selector, config.reviewedCreate2FailureTxHash
+                DeployAura.UnexpectedCreate2RecoveryEvidence.selector, config.reviewedCreate2RecoveryTxHash
             )
         );
         runner.run();
@@ -428,7 +443,7 @@ contract DeployAuraTest is Test {
         runner.run();
     }
 
-    function test_identicalFactoryFrontRunRecoveryRejectsAdditionalNonceDrift() public {
+    function test_recoveryRejectsAdditionalNonceDrift() public {
         _deployCoreWithoutInitialization();
         vm.setNonce(DEPLOYER, STARTING_NONCE + 4);
         runner.setConfig(config);
@@ -742,14 +757,15 @@ contract DeployAuraTest is Test {
         assertFalse(hook.auraPoolInitialized());
     }
 
-    function _prepareRecoveryEvidence()
+    function _prepareSuccessfulRecoveryEvidence()
         internal
         returns (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt)
     {
         _deployCoreWithoutInitialization();
         vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
-        config.reviewedCreate2FailureTxHash = keccak256("reviewed failed CREATE2 transaction");
-        return _validRecoveryEvidence(config.reviewedCreate2FailureTxHash);
+        config.reviewedCreate2RecoveryTxHash = keccak256("reviewed CREATE2 recovery transaction");
+        (transaction, receipt) = _validRecoveryEvidence(config.reviewedCreate2RecoveryTxHash);
+        receipt.status = 1;
     }
 
     function _validRecoveryEvidence(bytes32 transactionHash)
@@ -810,7 +826,7 @@ contract DeployAuraTest is Test {
         vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(c.initialSqrtPriceX96));
         vm.setEnv("AURA_DEPLOYER", vm.toString(c.deployer));
         vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString(c.deployerStartingNonce));
-        vm.setEnv("AURA_REVIEWED_CREATE2_FAILURE_TX_HASH", vm.toString(c.reviewedCreate2FailureTxHash));
+        vm.setEnv("AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH", vm.toString(c.reviewedCreate2RecoveryTxHash));
         vm.setEnv("AURA_CREATE2_FACTORY", vm.toString(c.create2Factory));
         vm.setEnv("AURA_VERIFIER", vm.toString(c.verifier));
         vm.setEnv("AURA_PREDICTED_ROUTER", vm.toString(c.predictedRouter));

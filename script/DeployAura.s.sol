@@ -169,7 +169,7 @@ contract DeployAura is Script {
             initialSqrtPriceX96: uint160(initialSqrtPriceX96Value),
             deployer: vm.envAddress("AURA_DEPLOYER"),
             deployerStartingNonce: uint64(startingNonceValue),
-            reviewedCreate2FailureTxHash: vm.envBytes32("AURA_REVIEWED_CREATE2_FAILURE_TX_HASH"),
+            reviewedCreate2RecoveryTxHash: vm.envBytes32("AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH"),
             create2Factory: vm.envAddress("AURA_CREATE2_FACTORY"),
             verifier: vm.envAddress("AURA_VERIFIER"),
             predictedRouter: vm.envAddress("AURA_PREDICTED_ROUTER"),
@@ -401,24 +401,25 @@ contract DeployAura is Script {
     {
         uint64 actual = vm.getNonce(config.deployer);
         if (actual == expected) {
-            if (config.reviewedCreate2FailureTxHash != bytes32(0)) {
-                revert UnexpectedCreate2RecoveryEvidence(config.reviewedCreate2FailureTxHash);
+            if (config.reviewedCreate2RecoveryTxHash != bytes32(0)) {
+                revert UnexpectedCreate2RecoveryEvidence(config.reviewedCreate2RecoveryTxHash);
             }
             return;
         }
 
-        // During a `--slow` broadcast, an identical permissionless CREATE2 call
-        // may land after the router receipt but before the deployer's factory
-        // transaction. The deployer's raw factory call then reverts and consumes
-        // exactly one nonce. A rerun may continue to guarded initialization only
-        // after the existing hook passed every code, address, flag, and immutable
-        // check above and the manifest names the failed factory transaction.
-        // The transaction and receipt are fetched from the configured chain and
-        // bound to the sender, nonce, factory, calldata, mined block, and failed
-        // status before recovery is accepted. No unrelated wallet activity or
-        // other nonce drift is accepted as implicit recovery evidence.
+        // During a `--slow` broadcast, exactly one factory nonce can be consumed
+        // before initialization in either of two audited states: an identical
+        // permissionless CREATE2 call front-ran the deployer's failed factory
+        // transaction, or the deployer's factory transaction succeeded before
+        // the broadcast was interrupted. A rerun may continue to guarded
+        // initialization only after the existing hook passed every code, address,
+        // flag, and immutable check above and the manifest names that exact factory
+        // transaction. The transaction and receipt are fetched from the configured
+        // chain and bound to the sender, nonce, factory, calldata, mined block, and
+        // a canonical failed-or-successful receipt status. No unrelated wallet
+        // activity or other nonce drift is accepted as implicit recovery evidence.
         if (exactHookAlreadyDeployed && expected != type(uint64).max && actual == expected + 1) {
-            if (config.reviewedCreate2FailureTxHash == bytes32(0)) revert MissingCreate2RecoveryEvidence();
+            if (config.reviewedCreate2RecoveryTxHash == bytes32(0)) revert MissingCreate2RecoveryEvidence();
             _requireCreate2RecoveryEvidence(config, expected);
             return;
         }
@@ -427,7 +428,7 @@ contract DeployAura is Script {
     }
 
     function _requireCreate2RecoveryEvidence(AuraDeploymentConfig memory config, uint64 expectedNonce) internal {
-        bytes32 reviewedHash = config.reviewedCreate2FailureTxHash;
+        bytes32 reviewedHash = config.reviewedCreate2RecoveryTxHash;
         (Create2RecoveryTransaction memory transaction, Create2RecoveryReceipt memory receipt) =
             _loadCreate2RecoveryEvidence(reviewedHash);
 
@@ -443,7 +444,7 @@ contract DeployAura is Script {
             receipt.transactionHash != reviewedHash || receipt.blockHash == bytes32(0)
                 || receipt.blockHash != transaction.blockHash || receipt.blockNumber == 0
                 || receipt.blockNumber != transaction.blockNumber || receipt.sender != config.deployer
-                || receipt.target != config.create2Factory || receipt.status != 0
+                || receipt.target != config.create2Factory || receipt.status > 1
         ) revert InvalidCreate2RecoveryReceipt(reviewedHash);
     }
 

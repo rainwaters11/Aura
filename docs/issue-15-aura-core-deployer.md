@@ -217,20 +217,25 @@ the hook-gated authority+price checks after deployment. If the pool is already
 initialized, execution is accepted only when the observed starting price equals
 the approved manifest value.
 A verifier with matching verified bytecode may be reused only under a newly
-reviewed manifest. If an identical permissionless CREATE2 call lands between
-simulation and the deployer's factory transaction, `--slow` stops after the
-deployer's raw factory transaction reverts and consumes one nonce. A new
-read-only preflight may accept exactly that one additional nonce only after the
-verifier, router, and existing hook pass all approved code, address, flag,
-PoolId, and immutable checks and the typed manifest names the exact failed
-factory transaction. The script retrieves that transaction and receipt from
-chain 1301 and requires matching transaction/receipt hashes and blocks, a mined
-failed status, chain 1301, the approved deployer, nonce `starting + 2`, the
-approved CREATE2 factory, and exact `salt || hook initcode` input. Operator
-review remains an additional check, not the trust boundary. The recovery run
-then records only the guarded initialization. A fresh run requires a zero
-recovery hash; missing or stale evidence, RPC/JSON failure, any field mismatch,
-mismatched hook code, or any further nonce drift quarantines the entire tuple.
+reviewed manifest. A `--slow` broadcast can consume exactly one factory nonce
+before initialization in either of two audited states: an identical
+permissionless CREATE2 call lands first and the deployer's copied call fails, or
+the deployer's own factory call succeeds before broadcasting is interrupted. A
+new read-only preflight may accept exactly that one additional nonce only after
+the verifier, router, and existing hook pass all approved code, address, flag,
+PoolId, and immutable checks and the typed manifest names the exact factory
+transaction in `AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH`.
+
+The script retrieves that transaction and receipt from chain 1301 and requires
+matching transaction/receipt hashes and blocks, canonical mined status `0` or
+`1`, chain 1301, the approved deployer, nonce `starting + 2`, the approved
+CREATE2 factory, and exact `salt || hook initcode` input. Status `0` is the
+reviewed failed copied-call case; status `1` is the reviewed successful hook
+deployment case. Operator review remains an additional check, not the trust
+boundary. The recovery run then records only the guarded initialization. A
+fresh run requires a zero recovery hash; missing or stale evidence, RPC/JSON
+failure, any field mismatch, a noncanonical status, mismatched hook code, or any
+further nonce drift quarantines the entire tuple.
 Repository rollback is a revert of this deployment-package commit; immutable
 on-chain contracts have no destructive rollback.
 

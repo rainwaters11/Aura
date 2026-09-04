@@ -155,12 +155,12 @@ extcodesize(predictedHook) == 0
 immediately before broadcast, and keep
 
 ```text
-AURA_REVIEWED_CREATE2_FAILURE_TX_HASH=0x0000000000000000000000000000000000000000000000000000000000000000
+AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH=0x0000000000000000000000000000000000000000000000000000000000000000
 ```
 
 An occupied predicted hook aborts a fresh deployment. It is allowed only in the
-recovery preflight below, after the exact deployed hook and a reviewed failed
-factory transaction satisfy every recovery check.
+recovery preflight below, after the exact deployed hook and the reviewed factory
+transaction that consumed the deployment nonce satisfy every recovery check.
 
 ## Deterministic command templates (do not run without approval)
 
@@ -303,26 +303,33 @@ verifies immutable+runtime bindings before reusing a preexisting hook. Pool
 initialization is accepted only through hook-gated `beforeInitialize` checks for
 authority, PoolKey, PoolId, approved price, and one-time execution.
 
-If an observer submits the identical permissionless CREATE2 factory call after
-the router receipt but before the deployer's factory transaction, `--slow` stops
-when the deployer's raw factory transaction reverts. That failed transaction
-consumes one deployer nonce. A fresh script run may accept exactly that one
-additional nonce only when the verifier, router, and hook already exist, the hook
-has passed the approved runtime, address, flag, PoolId, and immutable checks, and
-the typed manifest contains the exact hash of the reverted
-deployer factory transaction in `AURA_REVIEWED_CREATE2_FAILURE_TX_HASH`. Before
-accepting recovery, the script uses `cast rpc` through Foundry FFI and the
-repository's `unichain_sepolia` alias to retrieve the public transaction and
+Exactly one additional deployment nonce may exist before initialization in two
+audited `--slow` interruption states. First, an observer may submit the identical
+permissionless CREATE2 factory call after the router receipt but before the
+deployer's factory transaction, causing the deployer's transaction to revert.
+Second, the deployer's own factory transaction may succeed before broadcasting
+is interrupted and before the initialization transaction is sent. A fresh
+script run accepts either state only when the verifier, router, and hook already
+exist, the hook has passed the approved runtime, address, flag, PoolId, and
+immutable checks, and the typed manifest contains the exact factory transaction
+hash in `AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH`.
+
+Before accepting recovery, the script uses `cast rpc` through Foundry FFI and
+the repository's `unichain_sepolia` alias to retrieve the public transaction and
 receipt from chain 1301. It requires the configured transaction hash, matching
-mined block identity, failed receipt status, approved deployer, nonce starting
-plus two, approved CREATE2 factory, and exact approved salt concatenated with
-the approved hook initcode. These executable checks prove the nonce was consumed
-by the factory race rather than unrelated wallet activity; operator review is
-additional evidence only. The recovery run then records only the authority-gated
-initialization transaction. Missing/stale evidence, RPC or JSON failure, any
-transaction/receipt field mismatch, mismatched hook code, or additional nonce
-drift remains a hard stop. A normal/fresh run must keep the recovery hash zero so
-stale recovery approval cannot be reused.
+mined block identity, canonical receipt status `0` or `1`, approved deployer,
+nonce starting plus two, approved CREATE2 factory, and exact approved salt
+concatenated with the approved hook initcode. Status `0` proves the deployer's
+copied factory call failed after the identical hook was deployed; status `1`
+proves the deployer's factory call deployed that hook successfully. In both
+cases, the executable transaction binding proves the nonce was consumed by the
+approved factory call rather than unrelated wallet activity; operator review is
+additional evidence only. The recovery run then records only the
+authority-gated initialization transaction. Missing/stale evidence, RPC or JSON
+failure, any transaction/receipt field mismatch, a noncanonical receipt status,
+mismatched hook code, or additional nonce drift remains a hard stop. A
+normal/fresh run must keep the recovery hash zero so stale recovery approval
+cannot be reused.
 
 Immediately before any separately approved future pool-initialization
 transaction, read the final PoolId's PoolManager `slot0` again and stop if its
@@ -336,12 +343,13 @@ There is no on-chain rollback for immutable deployments. Failure recovery is:
 2. preserve receipts, nonce, salt, bytecode hashes, and public logs;
 3. if verifier deployment alone succeeds, it is harmless and reusable only if
    its verified runtime hash matches;
-4. if the router succeeds and the deployer's factory transaction fails, rerun
-   the read-only preflight; continue only when the exact approved hook exists,
-   the nonce is exactly one above the verifier/router deployment nonce, and the
-   manifest names the failed factory transaction that the script retrieves and
-   validates against the approved chain, sender, nonce, target, failed status,
-   mined block, salt, and hook initcode;
+4. if the router succeeds and the hook is deployed but initialization is not
+   confirmed, rerun the read-only preflight; continue only when the exact
+   approved hook exists, the nonce is exactly one above the verifier/router
+   deployment nonce, and the manifest names the factory transaction that the
+   script retrieves and validates against the approved chain, sender, nonce,
+   target, canonical failed-or-successful status, mined block, salt, and hook
+   initcode;
 5. if no exact hook exists, the nonce differs by any other amount, or any
    immutable/code/flag check fails, quarantine every
    address and prepare a new reviewed manifest and salt;

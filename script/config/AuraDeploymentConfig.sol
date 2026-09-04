@@ -12,7 +12,7 @@ struct AuraDeploymentConfig {
     uint160 initialSqrtPriceX96;
     address deployer;
     uint64 deployerStartingNonce;
-    bytes32 reviewedCreate2FailureTxHash;
+    bytes32 reviewedCreate2RecoveryTxHash;
     address create2Factory;
     address verifier;
     address predictedRouter;
