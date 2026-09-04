@@ -52,13 +52,17 @@ bounds; the nonce must also leave two slots for the verifier and router CREATE
 address predictions.
 
 The compiler fields document the intended build profile, but are not trusted as
-proof of the bytecode that Foundry actually compiled. The manifest must also
-contain separately approved creation and runtime code hashes for
-`AuraSettlementVerifier`, `AuraRouter`, and `AuraHook`. Preflight hashes each
-current `type(...).creationCode` and `type(...).runtimeCode` value and compares
-it with the approved value before dependency checks, address prediction, salt
-mining, simulation, or broadcast. Compiler and CLI overrides therefore fail
-unless they produce byte-for-byte identical deployable artifacts.
+proof of the bytecode that Foundry actually compiled. The manifest therefore
+contains separately approved creation-code hashes for `AuraSettlementVerifier`,
+`AuraRouter`, and `AuraHook`. Before dependency checks, address prediction, salt
+mining, simulation, or broadcast, preflight compares those values with the
+current `type(...).creationCode` hashes and also compares the verifier's current
+`type(...).runtimeCode` hash. Because the router and hook runtime bytecode embeds
+constructor immutables, their configured runtime hashes are checked against the
+deployed code during deployment or identical-CREATE2 recovery, together with
+explicit immutable-value checks. Compiler and CLI overrides therefore fail
+unless the resulting creation code and configured deployed artifacts match the
+approved manifest.
 
 Approved fixed values are:
 
