@@ -103,9 +103,7 @@ contract DeployAura is Script {
         if (initialSqrtPriceX96Value == 0 || initialSqrtPriceX96Value > type(uint160).max) {
             revert InvalidInitialSqrtPrice(initialSqrtPriceX96Value);
         }
-        if (
-            initialSqrtPriceX96Value <= TickMath.MIN_SQRT_PRICE || initialSqrtPriceX96Value >= TickMath.MAX_SQRT_PRICE
-        ) revert InitialSqrtPriceOutOfRange(initialSqrtPriceX96Value);
+        if (initialSqrtPriceX96Value <= TickMath.MIN_SQRT_PRICE || initialSqrtPriceX96Value >= TickMath.MAX_SQRT_PRICE) revert InitialSqrtPriceOutOfRange(initialSqrtPriceX96Value);
         if (startingNonceValue > uint256(type(uint64).max) - 2) revert InvalidConfiguration();
         if (optimizerRunsValue > type(uint32).max || optimizerRunsValue != 200) revert InvalidConfiguration();
 
@@ -155,7 +153,8 @@ contract DeployAura is Script {
         ) revert InvalidConfiguration();
         if (config.initialSqrtPriceX96 == 0) revert InvalidInitialSqrtPrice(0);
         if (
-            config.initialSqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || config.initialSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE
+            config.initialSqrtPriceX96 <= TickMath.MIN_SQRT_PRICE
+                || config.initialSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE
         ) revert InitialSqrtPriceOutOfRange(config.initialSqrtPriceX96);
 
         _requireCreationCodeHash(

@@ -135,7 +135,10 @@ contract DeployAuraTest is Test {
         assertEq(PoolId.unwrap(hook.auraPoolId()), PoolId.unwrap(router.auraPoolId()));
         assertEq(script.UNICHAIN_SEPOLIA_POOL_MANAGER().codehash, poolManagerCodeHashBefore);
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
-        assertEq(PoolId.unwrap(PoolManagerSlot0Mock(config.poolManager).lastInitializedPoolId()), PoolId.unwrap(hook.auraPoolId()));
+        assertEq(
+            PoolId.unwrap(PoolManagerSlot0Mock(config.poolManager).lastInitializedPoolId()),
+            PoolId.unwrap(hook.auraPoolId())
+        );
         assertEq(PoolManagerSlot0Mock(config.poolManager).lastInitializedSqrtPriceX96(), config.initialSqrtPriceX96);
     }
 
@@ -186,8 +189,9 @@ contract DeployAuraTest is Test {
 
     function test_poolInitializationRaceDuringBroadcastRevertsAtomically() public {
         runner.setConfig(config);
-        bytes memory initializeCalldata =
-            abi.encodeWithSelector(PoolManagerSlot0Mock.initialize.selector, script.auraPoolKey(config), config.initialSqrtPriceX96);
+        bytes memory initializeCalldata = abi.encodeWithSelector(
+            PoolManagerSlot0Mock.initialize.selector, script.auraPoolKey(config), config.initialSqrtPriceX96
+        );
         vm.mockCallRevert(config.poolManager, initializeCalldata, bytes("race"));
 
         vm.expectRevert(DeployAura.Create2DeploymentFailed.selector);
@@ -393,9 +397,7 @@ contract DeployAuraTest is Test {
 
     function test_loadConfigRejectsOversizedInitialSqrtPriceThatAliasesApprovedValue() public {
         _setEnvironment(config);
-        vm.setEnv(
-            "AURA_INITIAL_SQRT_PRICE_X96", vm.toString((uint256(1) << 160) + uint256(config.initialSqrtPriceX96))
-        );
+        vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString((uint256(1) << 160) + uint256(config.initialSqrtPriceX96)));
         vm.expectRevert(
             abi.encodeWithSelector(
                 DeployAura.InvalidInitialSqrtPrice.selector, (uint256(1) << 160) + uint256(config.initialSqrtPriceX96)
