@@ -210,8 +210,14 @@ the hook-gated authority+price checks after deployment. If the pool is already
 initialized, execution is accepted only when the observed starting price equals
 the approved manifest value.
 A verifier with matching verified bytecode may be reused only under a newly
-reviewed manifest. A router whose hook deployment failed is abandoned with its
-PoolKey. Any hook address/code/immutable mismatch quarantines the entire tuple.
+reviewed manifest. If an identical permissionless CREATE2 call lands between
+simulation and the deployer's factory transaction, `--slow` stops after the
+deployer's raw factory transaction reverts and consumes one nonce. A new
+read-only preflight may accept exactly that one additional nonce only after the
+verifier, router, and existing hook pass all approved code, address, flag,
+PoolId, and immutable checks; the recovery run then records only the guarded
+initialization. Missing or mismatched hook code, or any further nonce drift,
+quarantines the entire tuple.
 Repository rollback is a revert of this deployment-package commit; immutable
 on-chain contracts have no destructive rollback.
 

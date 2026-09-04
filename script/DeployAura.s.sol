@@ -91,6 +91,10 @@ contract DeployAura is Script {
         if (!hookAlreadyDeployed) {
             bytes memory initcode = hookInitcode(config);
             (bool success,) = config.create2Factory.call(abi.encodePacked(config.hookSalt, initcode));
+            // A hook deployed after simulation but before this raw factory transaction
+            // makes the broadcast transaction revert. `validatePreflight` permits one
+            // consumed factory nonce on the audited recovery run only after the exact
+            // hook deployment and immutable bindings have been verified.
             if (!success && config.minedHook.code.length == 0) revert Create2DeploymentFailed();
         }
         hook = AuraHook(config.minedHook);
@@ -231,7 +235,6 @@ contract DeployAura is Script {
         uint64 expectedNonce = config.deployerStartingNonce;
         if (verifierAlreadyDeployed) ++expectedNonce;
         if (routerAlreadyDeployed) ++expectedNonce;
-        _requireNonce(config.deployer, expectedNonce);
 
         address verifierPrediction = vm.computeCreateAddress(config.deployer, config.deployerStartingNonce);
         if (verifierPrediction != config.verifier) revert AddressMismatch(config.verifier, verifierPrediction);
@@ -267,6 +270,7 @@ contract DeployAura is Script {
             (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
             if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(poolId);
         }
+        _requireDeploymentNonce(config.deployer, expectedNonce, hookAlreadyDeployed);
     }
 
     function auraPoolKey(AuraDeploymentConfig memory config) public pure returns (PoolKey memory) {
@@ -366,6 +370,21 @@ contract DeployAura is Script {
     function _requireNonce(address deployer, uint64 expected) internal view {
         uint64 actual = vm.getNonce(deployer);
         if (actual != expected) revert NonceDrift(expected, actual);
+    }
+
+    function _requireDeploymentNonce(address deployer, uint64 expected, bool exactHookAlreadyDeployed) internal view {
+        uint64 actual = vm.getNonce(deployer);
+        if (actual == expected) return;
+
+        // During a `--slow` broadcast, an identical permissionless CREATE2 call
+        // may land after the router receipt but before the deployer's factory
+        // transaction. The deployer's raw factory call then reverts and consumes
+        // exactly one nonce. A rerun may continue to guarded initialization only
+        // after the existing hook passed every code, address, flag, and immutable
+        // check above. No other nonce drift is accepted.
+        if (exactHookAlreadyDeployed && expected != type(uint64).max && actual == expected + 1) return;
+
+        revert NonceDrift(expected, actual);
     }
 
     function _requireCreationCodeHash(bytes32 artifact, bytes32 expected, bytes32 actual) internal pure {

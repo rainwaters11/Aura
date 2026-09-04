@@ -233,6 +233,57 @@ contract DeployAuraTest is Test {
         assertTrue(hook.auraPoolInitialized());
     }
 
+    function test_identicalFactoryFrontRunRecoveryAllowsOneConsumedNonceAndInitializes() public {
+        PoolKey memory key = script.auraPoolKey(config);
+        vm.startPrank(DEPLOYER);
+        new AuraSettlementVerifier();
+        new AuraRouter(IPoolManager(config.poolManager), key);
+        vm.stopPrank();
+
+        address frontRunner = makeAddr("frontRunner");
+        vm.prank(frontRunner);
+        (bool success,) = config.create2Factory.call(abi.encodePacked(config.hookSalt, script.hookInitcode(config)));
+        assertTrue(success);
+        AuraHook frontRunHook = AuraHook(config.minedHook);
+        assertEq(address(frontRunHook).codehash, config.hookRuntimeCodeHash);
+        assertFalse(frontRunHook.auraPoolInitialized());
+
+        // The deployer's subsequently reverted factory transaction consumed its
+        // nonce before `--slow` stopped the original broadcast.
+        vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
+        runner.setConfig(config);
+
+        (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) = runner.run();
+
+        assertEq(address(verifier), config.verifier);
+        assertEq(address(router), config.predictedRouter);
+        assertEq(address(hook), config.minedHook);
+        assertTrue(hook.auraPoolInitialized());
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
+    }
+
+    function test_consumedFactoryNonceRequiresExactPredeployedHook() public {
+        PoolKey memory key = script.auraPoolKey(config);
+        vm.startPrank(DEPLOYER);
+        new AuraSettlementVerifier();
+        new AuraRouter(IPoolManager(config.poolManager), key);
+        vm.stopPrank();
+        vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
+        runner.setConfig(config);
+
+        vm.expectRevert(abi.encodeWithSelector(DeployAura.NonceDrift.selector, STARTING_NONCE + 2, STARTING_NONCE + 3));
+        runner.run();
+    }
+
+    function test_identicalFactoryFrontRunRecoveryRejectsAdditionalNonceDrift() public {
+        _deployCoreWithoutInitialization();
+        vm.setNonce(DEPLOYER, STARTING_NONCE + 4);
+        runner.setConfig(config);
+
+        vm.expectRevert(abi.encodeWithSelector(DeployAura.NonceDrift.selector, STARTING_NONCE + 2, STARTING_NONCE + 4));
+        runner.run();
+    }
+
     function test_mismatchedExistingHookImmutablesAreRejected() public {
         _deployCoreWithoutInitialization();
         config.initialSqrtPriceX96 = config.initialSqrtPriceX96 + 1;

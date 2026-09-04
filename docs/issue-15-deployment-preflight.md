@@ -58,12 +58,14 @@ historical; exact-head CI for the initialization-authority callback guard and it
 remains pending.
 
 Those human-readable build fields are defense in depth, not authoritative proof
-of the artifacts used by `forge script`. The typed manifest separately requires
-approved creation and runtime code hashes for `AuraSettlementVerifier`,
-`AuraRouter`, and `AuraHook`. Preflight compares them to the current
-`type(...).creationCode` and `type(...).runtimeCode` hashes before dependency
-checks, address prediction, salt mining, simulation, or broadcast. Any compiler,
-optimizer, or CLI override that changes a deployable artifact is rejected.
+of the artifacts used by `forge script`. Before dependency checks or mining, the
+typed manifest binds the current `type(...).creationCode` for
+`AuraSettlementVerifier`, `AuraRouter`, and `AuraHook`, and separately compares
+the verifier's current `type(...).runtimeCode`. Because router and hook runtime
+bytecode contains constructor immutables, preflight instead compares their
+configured runtime hashes with deployed code during deployment or exact-hook
+recovery, then verifies every relevant immutable. Any compiler, optimizer, or
+CLI override that changes a bound artifact is rejected.
 
 ## Read-only network evidence
 
@@ -293,6 +295,16 @@ verifies immutable+runtime bindings before reusing a preexisting hook. Pool
 initialization is accepted only through hook-gated `beforeInitialize` checks for
 authority, PoolKey, PoolId, approved price, and one-time execution.
 
+If an observer submits the identical permissionless CREATE2 factory call after
+the router receipt but before the deployer's factory transaction, `--slow` stops
+when the deployer's raw factory transaction reverts. That failed transaction
+consumes one deployer nonce. A fresh script run may accept exactly that one
+additional nonce only when the verifier, router, and hook already exist and the
+hook has passed the approved runtime, address, flag, PoolId, and immutable checks.
+The recovery run then records only the authority-gated initialization
+transaction. Missing or mismatched hook code, or any additional nonce drift,
+remains a hard stop.
+
 Immediately before any separately approved future pool-initialization
 transaction, read the final PoolId's PoolManager `slot0` again and stop if its
 `sqrtPriceX96` is nonzero. Local tests alone never constitute deployment
@@ -305,9 +317,11 @@ There is no on-chain rollback for immutable deployments. Failure recovery is:
 2. preserve receipts, nonce, salt, bytecode hashes, and public logs;
 3. if verifier deployment alone succeeds, it is harmless and reusable only if
    its verified runtime hash matches;
-4. if the router succeeds but the hook fails, abandon that PoolKey/router pair;
-   never point production users at it;
-5. if the hook deploys but any immutable/code/flag check fails, quarantine every
+4. if the router succeeds and the deployer's factory transaction fails, rerun
+   the read-only preflight; continue only when the exact approved hook exists and
+   the nonce is exactly one above the verifier/router deployment nonce;
+5. if no exact hook exists, the nonce differs by any other amount, or any
+   immutable/code/flag check fails, quarantine every
    address and prepare a new reviewed manifest and salt;
 6. revert repository changes to this base commit for the code rollback. Never
    attempt destructive on-chain recovery or send funds to an unvalidated
