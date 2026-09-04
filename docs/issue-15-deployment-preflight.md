@@ -145,7 +145,7 @@ test "$((PREDICTED_AURA_HOOK & 0x3fff))" -eq "$((0x2088))"
 The local permission/mined-address test passed. A production address was **not**
 mined because its constructor tuple is incomplete. Therefore the production
 low-bit confirmation is pending, not passed. After configuration is approved,
-record the salt. For a fresh deployment, require both:
+record the salt. For the normal vacant-address path, require both:
 
 ```text
 uint160(predictedHook) & 0x3fff == 0x2088
@@ -158,9 +158,14 @@ immediately before broadcast, and keep
 AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH=0x0000000000000000000000000000000000000000000000000000000000000000
 ```
 
-An occupied predicted hook aborts a fresh deployment. It is allowed only in the
-recovery preflight below, after the exact deployed hook and the reviewed factory
-transaction that consumed the deployment nonce satisfy every recovery check.
+An occupied predicted hook is never accepted based on address occupancy alone.
+If the Aura deployer's nonce is still the exact approved starting value, the
+preflight may reuse the hook only after its runtime code, address, hook flags,
+PoolId, approved price, and every immutable binding match the manifest. This is
+the verified permissionless-predeployment case: the recovery hash stays zero
+because no Aura-deployer factory transaction exists. If the deployer's nonce
+has advanced exactly once, the separate transaction-evidence recovery preflight
+below applies. Any mismatch or other nonce drift is a hard stop.
 
 ## Deterministic command templates (do not run without approval)
 
@@ -303,6 +308,15 @@ verifies immutable+runtime bindings before reusing a preexisting hook. Pool
 initialization is accepted only through hook-gated `beforeInitialize` checks for
 authority, PoolKey, PoolId, approved price, and one-time execution.
 
+There are two distinct occupied-hook paths. If a third party submits the exact
+permissionless CREATE2 call before the Aura deployer sends its factory
+transaction, the deployer nonce remains at the approved starting value. The
+script accepts that state only after the existing hook passes every code,
+address, flag, PoolId, price, and immutable check; the manifest must keep
+`AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH` at zero because there is no deployer
+transaction to review. This is verified exact-hook reuse, not transaction
+recovery.
+
 Exactly one additional deployment nonce may exist before initialization in two
 audited `--slow` interruption states. First, an observer may submit the identical
 permissionless CREATE2 factory call after the router receipt but before the
@@ -343,17 +357,21 @@ There is no on-chain rollback for immutable deployments. Failure recovery is:
 2. preserve receipts, nonce, salt, bytecode hashes, and public logs;
 3. if verifier deployment alone succeeds, it is harmless and reusable only if
    its verified runtime hash matches;
-4. if the router succeeds and the hook is deployed but initialization is not
-   confirmed, rerun the read-only preflight; continue only when the exact
-   approved hook exists, the nonce is exactly one above the verifier/router
-   deployment nonce, and the manifest names the factory transaction that the
-   script retrieves and validates against the approved chain, sender, nonce,
-   target, canonical failed-or-successful status, mined block, salt, and hook
-   initcode;
-5. if no exact hook exists, the nonce differs by any other amount, or any
+4. if the exact approved hook was permissionlessly predeployed before the Aura
+   deployer sent its factory transaction, rerun the read-only preflight;
+   continue only when every hook binding validates, the deployer nonce remains
+   at the approved starting value, and the recovery hash remains zero;
+5. if the router succeeds and the deployer factory nonce is consumed but
+   initialization is not confirmed, rerun the read-only preflight; continue
+   only when the exact approved hook exists, the nonce is exactly one above the
+   verifier/router deployment nonce, and the manifest names the factory
+   transaction that the script retrieves and validates against the approved
+   chain, sender, nonce, target, canonical failed-or-successful status, mined
+   block, salt, and hook initcode;
+6. if no exact hook exists, the nonce differs by any other amount, or any
    immutable/code/flag check fails, quarantine every
    address and prepare a new reviewed manifest and salt;
-6. revert repository changes to this base commit for the code rollback. Never
+7. revert repository changes to this base commit for the code rollback. Never
    attempt destructive on-chain recovery or send funds to an unvalidated
    address.
 

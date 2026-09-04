@@ -217,7 +217,15 @@ the hook-gated authority+price checks after deployment. If the pool is already
 initialized, execution is accepted only when the observed starting price equals
 the approved manifest value.
 A verifier with matching verified bytecode may be reused only under a newly
-reviewed manifest. A `--slow` broadcast can consume exactly one factory nonce
+reviewed manifest. An exact hook permissionlessly predeployed before the Aura
+deployer sends its factory transaction may be reused only when the complete
+code, address, flag, PoolId, approved-price, and immutable validation passes,
+the deployer nonce remains at the approved starting value, and
+`AURA_REVIEWED_CREATE2_RECOVERY_TX_HASH` is zero. No recovery transaction is
+required or permitted for this no-nonce-drift state because the deployer did
+not send one.
+
+A `--slow` broadcast can consume exactly one factory nonce
 before initialization in either of two audited states: an identical
 permissionless CREATE2 call lands first and the deployer's copied call fails, or
 the deployer's own factory call succeeds before broadcasting is interrupted. A
