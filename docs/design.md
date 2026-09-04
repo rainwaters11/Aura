@@ -70,6 +70,7 @@ When two documents disagree, the higher item controls. Ambiguity is a build bloc
 `AuraHook` inherits OpenZeppelin `BaseAsyncSwap`, which inherits `BaseHook`. Permissions are fixed to:
 
 ```solidity
+beforeInitialize: true
 beforeSwap: true
 beforeSwapReturnDelta: true
 ```

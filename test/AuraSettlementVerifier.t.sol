@@ -137,6 +137,7 @@ contract AuraSettlementVerifierTest is AuraParkingBase {
             invalidVerifier,
             address(this),
             address(this),
+            address(this),
             Constants.SQRT_PRICE_1_1
         );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
@@ -151,6 +152,7 @@ contract AuraSettlementVerifierTest is AuraParkingBase {
             3000,
             60,
             invalidVerifier,
+            address(this),
             address(this),
             address(this),
             Constants.SQRT_PRICE_1_1

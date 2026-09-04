@@ -17,12 +17,16 @@ struct AuraDeploymentConfig {
     address predictedRouter;
     address minedHook;
     bytes32 hookSalt;
+    address initializationAuthority;
     address callbackProxy;
     bytes32 callbackProxyCodeHash;
     address expectedRvmId;
     bytes32 verifierCreationCodeHash;
     bytes32 routerCreationCodeHash;
     bytes32 hookCreationCodeHash;
+    bytes32 verifierRuntimeCodeHash;
+    bytes32 routerRuntimeCodeHash;
+    bytes32 hookRuntimeCodeHash;
     string compilerVersion;
     bool optimizer;
     uint32 optimizerRuns;

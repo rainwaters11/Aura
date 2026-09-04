@@ -21,8 +21,9 @@ In particular:
 - no `UNICHAIN_SEPOLIA_RPC` or deployer configuration was present in the
   preflight environment, so the configured endpoint, deployer address, balance,
   nonce, and required wallet balance could not be validated;
-- currencies, fee, tick spacing, callback proxy and its runtime code hash,
-  expected RVM ID, the verifier/router/hook creation-code hashes, solution
+- currencies, fee, tick spacing, initialization authority, callback proxy and
+  its runtime code hash, expected RVM ID, the verifier/router/hook
+  creation+runtime hashes, solution
   publisher, and state-view addresses have not been committed as an approved
   deployment manifest;
 - the Aura Core deployment package exists on this branch, but its approved
@@ -45,24 +46,24 @@ commit above.
 | Gate | Historical result | Provenance |
 | --- | --- | --- |
 | `forge fmt --check` | Pass | Local handoff snapshot `5d91ef0`; not CI and not the current PR head |
-| `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes | Local handoff snapshot `5d91ef0`; predates the constructor guard |
+| `forge build --sizes` | Pass with dependency/test warnings; optimized `AuraHook` runtime 21,716 bytes, margin 2,860 bytes; initcode 23,665 bytes, margin 25,487 bytes | Local handoff snapshot `5d91ef0`; predates the initialization-authority callback guard |
 | `forge test -vvv` | 204 tests passed, 0 failed, 8 explicitly skipped Reactive fork tests, 212 total; all 21 deployer tests passed | Historical CI run `#80` at `74768bafe67a73bd8a4a3bb2e650ca182869bb30` |
 | Focused and full local reruns | 27 deployer tests passed; 210 full-suite tests passed, 0 failed, 8 intentionally skipped, 218 total | Local handoff snapshot `5d91ef0`; separate from CI run `#80` and not current exact-head evidence |
-| Settlement/accounting invariants | Pass as part of the historical full suites | CI run `#80` and local snapshot `5d91ef0`; neither covers the current constructor guard |
+| Settlement/accounting invariants | Pass as part of the historical full suites | CI run `#80` and local snapshot `5d91ef0`; neither covers the current initialization-authority callback guard |
 
 Compiler/build identity is Solidity 0.8.30, Cancun, optimizer enabled with 200
 runs, `via_ir = false`, metadata bytecode hash disabled. Foundry used for the
 historical preflight was Forge 1.8.1. Every result above is explicitly
-historical; exact-head CI for the constructor guard and its new deployment test
+historical; exact-head CI for the initialization-authority callback guard and its deployment tests
 remains pending.
 
 Those human-readable build fields are defense in depth, not authoritative proof
 of the artifacts used by `forge script`. The typed manifest separately requires
-approved creation-code hashes for `AuraSettlementVerifier`, `AuraRouter`, and
-`AuraHook`. Preflight compares them to the current `type(...).creationCode`
-hashes before dependency checks, address prediction, salt mining, simulation, or
-broadcast. Any compiler, optimizer, or CLI override that changes a deployable
-artifact is rejected.
+approved creation and runtime code hashes for `AuraSettlementVerifier`,
+`AuraRouter`, and `AuraHook`. Preflight compares them to the current
+`type(...).creationCode` and `type(...).runtimeCode` hashes before dependency
+checks, address prediction, salt mining, simulation, or broadcast. Any compiler,
+optimizer, or CLI override that changes a deployable artifact is rejected.
 
 ## Read-only network evidence
 
@@ -87,7 +88,7 @@ was requested or printed.
 | --- | --- | --- | --- | --- |
 | 1 | `AuraSettlementVerifier` | Unichain Sepolia | None | `0x` |
 | 2 | `AuraRouter` | Unichain Sepolia | canonical PoolManager; immutable PoolKey containing the **predicted** AuraHook, sorted currencies, fee, and tick spacing | `(address,(address,address,uint24,int24,address))` |
-| 3 | `AuraHook` | Unichain Sepolia, CREATE2 | PoolManager, deployed router, currencies, fee, tick spacing, deployed verifier, callback proxy, expected RVM ID, approved initial sqrt price | `(address,address,address,address,uint24,int24,address,address,address,uint160)` |
+| 3 | `AuraHook` | Unichain Sepolia, CREATE2 | PoolManager, deployed router, currencies, fee, tick spacing, deployed verifier, initialization authority, callback proxy, expected RVM ID, approved initial sqrt price | `(address,address,address,address,uint24,int24,address,address,address,address,uint160)` |
 
 `AuraClearingMath` is internally linked into creation bytecode and is not a
 separate deployment. The canonical PoolManager, currencies, callback proxy, and
@@ -110,9 +111,9 @@ The address cycle is resolved as follows:
    predicted router address is unchanged (CREATE addresses depend on sender and
    nonce, not initcode);
 6. deploy verifier, router, then hook through the canonical CREATE2 deployer;
-7. during CREATE2 hook construction, derive the final immutable PoolKey, reject
-   any preinitialized PoolId, and initialize PoolManager at the approved
-   `sqrtPriceX96`;
+7. after CREATE2 deployment, verify runtime+immutables and call
+   `PoolManager.initialize` from the approved initialization authority at the
+   approved `sqrtPriceX96` through the hook-gated `beforeInitialize` path;
 8. compare every deployed immutable and runtime code hash.
 
 ### Normative production components absent at this commit
@@ -126,16 +127,17 @@ not be improvised in Issue 15.
 
 ## Hook permission gate
 
-OpenZeppelin `BaseAsyncSwap` requires only:
+AuraHook requires:
 
+- `BEFORE_INITIALIZE_FLAG = 0x2000`;
 - `BEFORE_SWAP_FLAG = 0x0080`;
 - `BEFORE_SWAP_RETURNS_DELTA_FLAG = 0x0008`.
 
-Thus `REQUIRED_FLAGS = 0x0088` and `ALL_HOOK_MASK = 0x3fff`. The mandatory
+Thus `REQUIRED_FLAGS = 0x2088` and `ALL_HOOK_MASK = 0x3fff`. The mandatory
 pre-deployment assertion is:
 
 ```bash
-test "$((PREDICTED_AURA_HOOK & 0x3fff))" -eq "$((0x0088))"
+test "$((PREDICTED_AURA_HOOK & 0x3fff))" -eq "$((0x2088))"
 ```
 
 The local permission/mined-address test passed. A production address was **not**
@@ -144,7 +146,7 @@ low-bit confirmation is pending, not passed. After configuration is approved,
 record the salt and require both:
 
 ```text
-uint160(predictedHook) & 0x3fff == 0x0088
+uint160(predictedHook) & 0x3fff == 0x2088
 extcodesize(predictedHook) == 0
 ```
 
@@ -173,7 +175,7 @@ forge script script/DeployAura.s.sol:DeployAura \
 The `DeployAura` dry run must reject any chain other than 1301, print only
 public configuration, assert code at all external dependencies, assert currency
 ordering and the exact USDC address, require the immutable fee `3000`, tick
-spacing `60`, and approved initial sqrt price, mine and recheck `0x0088`, and
+spacing `60`, and approved initial sqrt price, mine and recheck `0x2088`, and
 emit a reviewable deployment plan. Environment integers must be range-checked at
 full width before narrowing, including nonzero/width/TickMath bounds for
 `AURA_INITIAL_SQRT_PRICE_X96`, and the starting nonce must leave room for both
@@ -278,18 +280,18 @@ maximum deployment gas from the successful 1301 dry run
 + an operator reserve
 ```
 
-The current Core alone would require three deployment transactions (verifier,
-router, CREATE2 hook with atomic pool initialization). The complete frozen
+The current Core alone would require four deployment transactions (verifier,
+router, CREATE2 hook, then authorized pool initialization). The complete frozen
 production system requires additional
 inbox and Reactive dispatcher deployments and configuration/funding
 transactions, so an exact total cannot be stated at this commit. Liquidity
 funding remains a separate transaction and is explicitly excluded from
 preflight and deployment approval unless named.
 
-The script rejects an initialized final PoolId during preflight. AuraHook then
-rechecks that PoolId inside CREATE2 construction and calls
-`PoolManager.initialize` with the approved price in the same transaction,
-making pool preinitialization or initialization races revert atomically.
+The script rejects an initialized final PoolId before a fresh deployment and
+verifies immutable+runtime bindings before reusing a preexisting hook. Pool
+initialization is accepted only through hook-gated `beforeInitialize` checks for
+authority, PoolKey, PoolId, approved price, and one-time execution.
 
 Immediately before any separately approved future pool-initialization
 transaction, read the final PoolId's PoolManager `slot0` again and stop if its

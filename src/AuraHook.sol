@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {BaseAsyncSwap} from "@openzeppelin/uniswap-hooks/src/base/BaseAsyncSwap.sol";
 import {BaseHook} from "@openzeppelin/uniswap-hooks/src/base/BaseHook.sol";
 import {IPoolManager, SwapParams} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -39,8 +40,10 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
 
     IAuraRouter public immutable auraRouter;
     IAuraSettlementVerifier public immutable settlementVerifier;
+    address public immutable initializationAuthority;
     address public immutable reactiveCallbackProxy;
     address public immutable expectedRvmId;
+    uint160 public immutable approvedInitialSqrtPriceX96;
     PoolId public immutable auraPoolId;
     Currency private immutable _currency0;
     Currency private immutable _currency1;
@@ -48,6 +51,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     int24 private immutable _tickSpacing;
 
     uint64 public activeBatchId;
+    bool public auraPoolInitialized;
     mapping(bytes32 orderId => ParkedOrder) public orders;
     mapping(uint64 batchId => bytes32[]) internal _batchOrderIds;
     mapping(uint64 batchId => BatchStatus) public batchStatus;
@@ -80,6 +84,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
 
     error InvalidRouter();
     error InvalidPoolManager();
+    error InvalidInitializationAuthority();
     error InvalidSettlementVerifier();
     error InvalidSettlementAuthority();
     error UnauthorizedSettlement();
@@ -96,6 +101,10 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     error InvalidPool();
     error AuraPoolAlreadyInitialized(PoolId poolId);
     error InvalidInitialSqrtPriceX96(uint160 sqrtPriceX96);
+    error UnauthorizedInitializationSender();
+    error InvalidInitializationPoolKey();
+    error InvalidInitializationPoolId();
+    error InvalidInitializationPrice(uint160 sqrtPriceX96);
     error ExactOutputUnsupported();
     error MalformedOrderData();
     error InvalidOrder();
@@ -183,20 +192,24 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
         uint24 fee,
         int24 tickSpacing,
         IAuraSettlementVerifier verifier,
+        address initAuthority,
         address callbackProxy,
         address rvmId,
         uint160 initialSqrtPriceX96
     ) BaseHook(manager) {
         if (address(router) == address(0)) revert InvalidRouter();
         if (address(router.poolManager()) != address(manager)) revert InvalidPoolManager();
+        if (initAuthority == address(0)) revert InvalidInitializationAuthority();
         if (address(verifier) == address(0) || address(verifier).code.length == 0) {
             revert InvalidSettlementVerifier();
         }
         if (callbackProxy == address(0) || rvmId == address(0)) revert InvalidSettlementAuthority();
         auraRouter = router;
         settlementVerifier = verifier;
+        initializationAuthority = initAuthority;
         reactiveCallbackProxy = callbackProxy;
         expectedRvmId = rvmId;
+        approvedInitialSqrtPriceX96 = initialSqrtPriceX96;
         _currency0 = currency0;
         _currency1 = currency1;
         _fee = fee;
@@ -207,9 +220,45 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
         PoolKey memory key = PoolKey(currency0, currency1, fee, tickSpacing, this);
         auraPoolId = key.toId();
         if (PoolId.unwrap(router.auraPoolId()) != PoolId.unwrap(auraPoolId)) revert InvalidPool();
-        (uint160 sqrtPriceX96,,,) = manager.getSlot0(auraPoolId);
-        if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(auraPoolId);
-        manager.initialize(key, initialSqrtPriceX96);
+    }
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory permissions) {
+        return Hooks.Permissions({
+            beforeInitialize: true,
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterAddLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: true,
+            afterSwap: false,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: true,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
+    function _beforeInitialize(address sender, PoolKey calldata key, uint160 sqrtPriceX96)
+        internal
+        override
+        returns (bytes4)
+    {
+        if (sender != initializationAuthority) revert UnauthorizedInitializationSender();
+        if (
+            Currency.unwrap(key.currency0) != Currency.unwrap(_currency0)
+                || Currency.unwrap(key.currency1) != Currency.unwrap(_currency1) || key.fee != _fee
+                || key.tickSpacing != _tickSpacing || address(key.hooks) != address(this)
+        ) revert InvalidInitializationPoolKey();
+        if (PoolId.unwrap(key.toId()) != PoolId.unwrap(auraPoolId)) revert InvalidInitializationPoolId();
+        if (sqrtPriceX96 != approvedInitialSqrtPriceX96) revert InvalidInitializationPrice(sqrtPriceX96);
+        if (auraPoolInitialized) revert AuraPoolAlreadyInitialized(auraPoolId);
+        (uint160 currentSqrtPriceX96,,,) = poolManager.getSlot0(auraPoolId);
+        if (currentSqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(auraPoolId);
+        auraPoolInitialized = true;
+        return this.beforeInitialize.selector;
     }
 
     function settleBatch(address rvmId, BatchSolution calldata solution) external {

@@ -9,9 +9,11 @@ Target: Unichain Sepolia, chain ID 1301
 ## Scope and stop decision
 
 This package prepares deployment of only `AuraSettlementVerifier`, `AuraRouter`,
-and `AuraHook`. The hook deployment atomically initializes the immutable pool at
-the operator-approved `AURA_INITIAL_SQRT_PRICE_X96`, but contains no liquidity,
-token transfer, verification, signing, or public broadcast action. Solution inbox,
+and `AuraHook`. The hook enforces one-time initialization through
+`beforeInitialize` for the operator-approved initialization authority and
+`AURA_INITIAL_SQRT_PRICE_X96`, while the script performs that initialize call only
+after verified hook code exists. The package contains no liquidity, token
+transfer, verification, signing, or public broadcast action. Solution inbox,
 Reactive dispatcher/automation, solver infrastructure or competition, frontend,
 Circle/Arc integration, and multi-pool behavior are deferred non-goals.
 
@@ -51,11 +53,12 @@ address predictions.
 
 The compiler fields document the intended build profile, but are not trusted as
 proof of the bytecode that Foundry actually compiled. The manifest must also
-contain separately approved creation-code hashes for `AuraSettlementVerifier`,
-`AuraRouter`, and `AuraHook`. Preflight hashes each current `type(...).creationCode`
-value and compares it with the approved value before dependency checks, address
-prediction, salt mining, simulation, or broadcast. Compiler and CLI overrides
-therefore fail unless they produce byte-for-byte identical deployable artifacts.
+contain separately approved creation and runtime code hashes for
+`AuraSettlementVerifier`, `AuraRouter`, and `AuraHook`. Preflight hashes each
+current `type(...).creationCode` and `type(...).runtimeCode` value and compares
+it with the approved value before dependency checks, address prediction, salt
+mining, simulation, or broadcast. Compiler and CLI overrides therefore fail
+unless they produce byte-for-byte identical deployable artifacts.
 
 Approved fixed values are:
 
@@ -89,22 +92,25 @@ part of address mining. PoolManager and token deployments are required to have
 code; their proxy/implementation governance remains an external dependency.
 
 Values still requiring explicit operator approval are deployer, finalized
-starting nonce, callback proxy address and runtime code hash, and expected RVM
-ID, plus the three creation-code hashes produced by the reviewed locked build.
-After those are fixed:
+starting nonce, initialization authority, callback proxy address and runtime code
+hash, expected RVM ID, and the verifier/router/hook creation+runtime code
+hashes produced by the reviewed locked build. After those are fixed:
 
 1. verifier is predicted at `CREATE(deployer, startingNonce)`;
 2. router is predicted at `CREATE(deployer, startingNonce + 1)`;
 3. hook initcode is built with those predictions, the approved initial sqrt
    price, and the complete immutable constructor tuple;
-4. the first salt within the bounded search whose address has low bits `0x0088`
+4. the first salt within the bounded search whose address has low bits `0x2088`
    is recorded;
 5. verifier and router are created in that order and nonce/address checked after
    each transaction;
 6. the hook is deployed by calling the same factory with `salt || initcode`; the
-   constructor derives the final immutable PoolKey, rejects a preinitialized
-   PoolId, and initializes that PoolId at the approved sqrt price atomically;
-7. the hook address, code, initialization result, and permission bits are checked.
+   constructor pins the immutable pool tuple, initialization authority, and
+   approved initial price;
+7. the hook address, code, and immutable values are checked;
+8. only after the hook code exists, the approved authority initializes the pool
+   once at the approved sqrt price through the hook-gated `beforeInitialize`
+   callback.
 
 This is specifically Uniswap v4 hook-address mining plus router-address
 prediction. It is not a generic deterministic-deployment policy.
@@ -127,7 +133,7 @@ prediction. It is not a generic deterministic-deployment policy.
 
 The handoff records local snapshot `5d91ef0` separately from CI run `#80`.
 That snapshot is not a GitHub Actions run, is not the current PR head, and
-predates the atomic constructor guard and its additional deployment test.
+predates the initialization-authority callback guard and its deployment tests.
 
 - `forge fmt` and `forge fmt --check`: passed.
 - `git diff --check`: passed.
@@ -171,9 +177,9 @@ forge script script/DeployAura.s.sol:DeployAura \
 The absence of `--broadcast` is mandatory. The script uses `startBroadcast` only
 to make Foundry construct the correct unsigned transaction sequence during
 simulation; it cannot publish without the CLI broadcast flag. Expected ordering
-is verifier CREATE, router CREATE, then CREATE2-factory call. Pool initialization
-occurs atomically inside the CREATE2 AuraHook constructor using the approved
-initial price.
+is verifier CREATE, router CREATE, then CREATE2-factory call, then one
+`PoolManager.initialize` call from the approved initialization authority at the
+approved initial price.
 
 For verification rehearsal, constructor arguments are exactly:
 
@@ -181,8 +187,8 @@ For verification rehearsal, constructor arguments are exactly:
 AuraSettlementVerifier: 0x
 AuraRouter: abi.encode(poolManager, (currency0,currency1,fee,tickSpacing,minedHook))
 AuraHook: abi.encode(poolManager,predictedRouter,currency0,currency1,fee,
-                     tickSpacing,verifier,callbackProxy,expectedRvmId,
-                     initialSqrtPriceX96)
+                     tickSpacing,verifier,initializationAuthority,
+                     callbackProxy,expectedRvmId,initialSqrtPriceX96)
 ```
 
 ## Required balance and recovery
@@ -194,10 +200,11 @@ balance is that deployment maximum plus an operator reserve; pool funding is
 separate and is not authorized by this package.
 
 On any mismatch, stop before the next transaction. The script rejects an
-already-initialized final PoolId during preflight, and the AuraHook constructor
-repeats that check and performs pool initialization in the same CREATE2
-transaction, so preinitialization between simulation and broadcast reverts the
-entire hook deployment atomically.
+already-initialized final PoolId before a fresh deployment, validates any
+preexisting hook code and immutables before reuse, and initializes only through
+the hook-gated authority+price checks after deployment. If the pool is already
+initialized, execution is accepted only when the observed starting price equals
+the approved manifest value.
 A verifier with matching verified bytecode may be reused only under a newly
 reviewed manifest. A router whose hook deployment failed is abandoned with its
 PoolKey. Any hook address/code/immutable mismatch quarantines the entire tuple.
@@ -209,11 +216,12 @@ on-chain contracts have no destructive rollback.
 Provide and approve exactly:
 
 ```text
-Use deployer <public address> at finalized nonce <nonce>, callback proxy
-<public address> with runtime code hash <bytes32>, and expected RVM identity
-<public address>, with approved verifier/router/hook creation-code hashes
-<bytes32>/<bytes32>/<bytes32>, and approved initial sqrt price
-<uint160>, to mine the Issue 15 AuraHook address and run an unsigned,
+Use deployer <public address> at finalized nonce <nonce>, initialization
+authority <public address>, callback proxy <public address> with runtime code
+hash <bytes32>, and expected RVM identity <public address>, with approved
+verifier/router/hook creation+runtime hashes
+<bytes32>/<bytes32>/<bytes32>/<bytes32>/<bytes32>/<bytes32>, and approved initial
+sqrt price <uint160>, to mine the Issue 15 AuraHook address and run an unsigned,
 non-broadcast Unichain Sepolia fork simulation from <exact commit>.
 ```
 

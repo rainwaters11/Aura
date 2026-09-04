@@ -484,7 +484,7 @@ npm run build
 | Replay resistance | Used solution hashes cannot settle again |
 | Claim safety | Failed recipient transfers do not consume claims |
 | Recovery | Unsettled owners retain a permissionless timeout refund |
-| Deployment guard | Preflight enforces an approved initial `sqrtPriceX96`; hook construction rejects preinitialized pools and initializes atomically |
+| Deployment guard | Preflight pins initialization authority and approved `sqrtPriceX96`; hook `beforeInitialize` gates one-time pool initialization after deployment |
 
 ## Partner integrations
 

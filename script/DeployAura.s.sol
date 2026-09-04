@@ -27,7 +27,7 @@ contract DeployAura is Script {
     using StateLibrary for IPoolManager;
     uint256 public constant UNICHAIN_SEPOLIA_CHAIN_ID = 1301;
     uint160 public constant REQUIRED_HOOK_FLAGS =
-        uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
+        uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
     uint160 public constant ALL_HOOK_MASK = uint160(Hooks.ALL_HOOK_MASK);
     uint256 public constant MAX_SALT_ATTEMPTS = 200_000;
     uint24 public constant AURA_FEE = 3000;
@@ -42,6 +42,9 @@ contract DeployAura is Script {
     bytes32 public constant VERIFIER_ARTIFACT = keccak256("AuraSettlementVerifier");
     bytes32 public constant ROUTER_ARTIFACT = keccak256("AuraRouter");
     bytes32 public constant HOOK_ARTIFACT = keccak256("AuraHook");
+    bytes32 public constant VERIFIER_RUNTIME_ARTIFACT = keccak256("AuraSettlementVerifierRuntime");
+    bytes32 public constant ROUTER_RUNTIME_ARTIFACT = keccak256("AuraRouterRuntime");
+    bytes32 public constant HOOK_RUNTIME_ARTIFACT = keccak256("AuraHookRuntime");
 
     error WrongChain(uint256 actual);
     error InvalidConfiguration();
@@ -49,38 +52,59 @@ contract DeployAura is Script {
     error UnexpectedCode(address account);
     error CodeHashMismatch(address account, bytes32 expected, bytes32 actual);
     error CreationCodeHashMismatch(bytes32 artifact, bytes32 expected, bytes32 actual);
+    error RuntimeCodeHashMismatch(bytes32 artifact, bytes32 expected, bytes32 actual);
     error NonceDrift(uint64 expected, uint64 actual);
     error AddressMismatch(address expected, address actual);
     error HookPermissionMismatch(address hook);
     error Create2DeploymentFailed();
     error AuraPoolAlreadyInitialized(PoolId poolId);
+    error AuraPoolInitializationMismatch(PoolId poolId, uint160 expected, uint160 actual);
     error InvalidInitialSqrtPrice(uint256 value);
     error InitialSqrtPriceOutOfRange(uint256 value);
 
     function run() external returns (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) {
         AuraDeploymentConfig memory config = loadConfig();
-        PoolKey memory key = validatePreflight(config);
+        (PoolKey memory key, bool verifierAlreadyDeployed, bool routerAlreadyDeployed, bool hookAlreadyDeployed) =
+            validatePreflight(config);
 
         vm.startBroadcast(config.deployer);
-        verifier = new AuraSettlementVerifier();
-        if (address(verifier) != config.verifier) revert AddressMismatch(config.verifier, address(verifier));
-        _requireNonce(config.deployer, config.deployerStartingNonce + 1);
-
-        router = new AuraRouter(IPoolManager(config.poolManager), key);
-        if (address(router) != config.predictedRouter) {
-            revert AddressMismatch(config.predictedRouter, address(router));
+        if (verifierAlreadyDeployed) {
+            verifier = AuraSettlementVerifier(config.verifier);
+        } else {
+            verifier = new AuraSettlementVerifier();
+            if (address(verifier) != config.verifier) revert AddressMismatch(config.verifier, address(verifier));
+            _requireNonce(config.deployer, config.deployerStartingNonce + 1);
         }
-        _requireNonce(config.deployer, config.deployerStartingNonce + 2);
+        _requireCodeHash(address(verifier), config.verifierRuntimeCodeHash);
 
-        bytes memory initcode = hookInitcode(config);
-        (bool success,) = config.create2Factory.call(abi.encodePacked(config.hookSalt, initcode));
-        if (!success) revert Create2DeploymentFailed();
+        if (routerAlreadyDeployed) {
+            router = AuraRouter(config.predictedRouter);
+        } else {
+            router = new AuraRouter(IPoolManager(config.poolManager), key);
+            if (address(router) != config.predictedRouter) {
+                revert AddressMismatch(config.predictedRouter, address(router));
+            }
+            _requireNonce(config.deployer, config.deployerStartingNonce + 2);
+        }
+        _requireCodeHash(address(router), config.routerRuntimeCodeHash);
+
+        if (!hookAlreadyDeployed) {
+            bytes memory initcode = hookInitcode(config);
+            (bool success,) = config.create2Factory.call(abi.encodePacked(config.hookSalt, initcode));
+            if (!success && config.minedHook.code.length == 0) revert Create2DeploymentFailed();
+        }
         hook = AuraHook(config.minedHook);
-        if (address(hook).code.length == 0) revert MissingCode(address(hook));
-        if (address(hook) != computeCreate2Address(config.create2Factory, config.hookSalt, keccak256(initcode))) {
-            revert AddressMismatch(config.minedHook, address(hook));
+        _requireHookDeployment(config, hook);
+
+        PoolId poolId = hook.auraPoolId();
+        (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
+        if (sqrtPriceX96 == 0) {
+            IPoolManager(config.poolManager).initialize(key, config.initialSqrtPriceX96);
+            (sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
         }
-        requireHookFlags(address(hook));
+        if (sqrtPriceX96 != config.initialSqrtPriceX96) {
+            revert AuraPoolInitializationMismatch(poolId, config.initialSqrtPriceX96, sqrtPriceX96);
+        }
         vm.stopBroadcast();
 
         console2.log("AuraSettlementVerifier", address(verifier));
@@ -122,12 +146,16 @@ contract DeployAura is Script {
             predictedRouter: vm.envAddress("AURA_PREDICTED_ROUTER"),
             minedHook: vm.envAddress("AURA_MINED_HOOK"),
             hookSalt: vm.envBytes32("AURA_HOOK_SALT"),
+            initializationAuthority: vm.envAddress("AURA_INITIALIZATION_AUTHORITY"),
             callbackProxy: vm.envAddress("AURA_CALLBACK_PROXY"),
             callbackProxyCodeHash: vm.envBytes32("AURA_CALLBACK_PROXY_CODEHASH"),
             expectedRvmId: vm.envAddress("AURA_EXPECTED_RVM_ID"),
             verifierCreationCodeHash: vm.envBytes32("AURA_VERIFIER_CREATION_CODEHASH"),
             routerCreationCodeHash: vm.envBytes32("AURA_ROUTER_CREATION_CODEHASH"),
             hookCreationCodeHash: vm.envBytes32("AURA_HOOK_CREATION_CODEHASH"),
+            verifierRuntimeCodeHash: vm.envBytes32("AURA_VERIFIER_RUNTIME_CODEHASH"),
+            routerRuntimeCodeHash: vm.envBytes32("AURA_ROUTER_RUNTIME_CODEHASH"),
+            hookRuntimeCodeHash: vm.envBytes32("AURA_HOOK_RUNTIME_CODEHASH"),
             compilerVersion: vm.envString("AURA_COMPILER_VERSION"),
             optimizer: vm.envBool("AURA_OPTIMIZER"),
             optimizerRuns: uint32(optimizerRunsValue),
@@ -135,7 +163,11 @@ contract DeployAura is Script {
         });
     }
 
-    function validatePreflight(AuraDeploymentConfig memory config) public view returns (PoolKey memory key) {
+    function validatePreflight(AuraDeploymentConfig memory config)
+        public
+        view
+        returns (PoolKey memory key, bool verifierAlreadyDeployed, bool routerAlreadyDeployed, bool hookAlreadyDeployed)
+    {
         if (block.chainid != UNICHAIN_SEPOLIA_CHAIN_ID || config.chainId != UNICHAIN_SEPOLIA_CHAIN_ID) {
             revert WrongChain(block.chainid);
         }
@@ -144,10 +176,12 @@ contract DeployAura is Script {
                 || config.currency1 != UNICHAIN_SEPOLIA_WETH || config.currency0 >= config.currency1
                 || config.fee != AURA_FEE || config.tickSpacing != AURA_TICK_SPACING
                 || config.deployerStartingNonce > type(uint64).max - 2 || config.deployer == address(0)
+                || config.initializationAuthority == address(0) || config.initializationAuthority != config.deployer
                 || config.callbackProxy == address(0) || config.callbackProxyCodeHash == bytes32(0)
                 || config.expectedRvmId == address(0) || config.create2Factory != DETERMINISTIC_DEPLOYMENT_PROXY
                 || config.verifierCreationCodeHash == bytes32(0) || config.routerCreationCodeHash == bytes32(0)
-                || config.hookCreationCodeHash == bytes32(0)
+                || config.hookCreationCodeHash == bytes32(0) || config.verifierRuntimeCodeHash == bytes32(0)
+                || config.routerRuntimeCodeHash == bytes32(0) || config.hookRuntimeCodeHash == bytes32(0)
                 || keccak256(bytes(config.compilerVersion)) != keccak256("0.8.30") || !config.optimizer
                 || config.optimizerRuns != 200 || config.viaIr
         ) revert InvalidConfiguration();
@@ -164,6 +198,11 @@ contract DeployAura is Script {
             ROUTER_ARTIFACT, config.routerCreationCodeHash, keccak256(type(AuraRouter).creationCode)
         );
         _requireCreationCodeHash(HOOK_ARTIFACT, config.hookCreationCodeHash, keccak256(type(AuraHook).creationCode));
+        _requireRuntimeCodeHash(
+            VERIFIER_RUNTIME_ARTIFACT, config.verifierRuntimeCodeHash, keccak256(type(AuraSettlementVerifier).runtimeCode)
+        );
+        _requireRuntimeCodeHash(ROUTER_RUNTIME_ARTIFACT, config.routerRuntimeCodeHash, keccak256(type(AuraRouter).runtimeCode));
+        _requireRuntimeCodeHash(HOOK_RUNTIME_ARTIFACT, config.hookRuntimeCodeHash, keccak256(type(AuraHook).runtimeCode));
 
         _requireCode(config.poolManager);
         _requireCode(config.currency0);
@@ -178,10 +217,21 @@ contract DeployAura is Script {
         if (config.callbackProxy.codehash != config.callbackProxyCodeHash) {
             revert CodeHashMismatch(config.callbackProxy, config.callbackProxyCodeHash, config.callbackProxy.codehash);
         }
-        _requireNoCode(config.verifier);
-        _requireNoCode(config.predictedRouter);
-        _requireNoCode(config.minedHook);
-        _requireNonce(config.deployer, config.deployerStartingNonce);
+        verifierAlreadyDeployed = config.verifier.code.length != 0;
+        routerAlreadyDeployed = config.predictedRouter.code.length != 0;
+        hookAlreadyDeployed = config.minedHook.code.length != 0;
+        if (hookAlreadyDeployed && (!verifierAlreadyDeployed || !routerAlreadyDeployed)) revert InvalidConfiguration();
+        if (routerAlreadyDeployed && !verifierAlreadyDeployed) revert InvalidConfiguration();
+        if (verifierAlreadyDeployed) {
+            _requireCodeHash(config.verifier, config.verifierRuntimeCodeHash);
+        }
+        if (routerAlreadyDeployed) {
+            _requireCodeHash(config.predictedRouter, config.routerRuntimeCodeHash);
+        }
+        uint64 expectedNonce = config.deployerStartingNonce;
+        if (verifierAlreadyDeployed) ++expectedNonce;
+        if (routerAlreadyDeployed) ++expectedNonce;
+        _requireNonce(config.deployer, expectedNonce);
 
         address verifierPrediction = vm.computeCreateAddress(config.deployer, config.deployerStartingNonce);
         if (verifierPrediction != config.verifier) revert AddressMismatch(config.verifier, verifierPrediction);
@@ -200,8 +250,23 @@ contract DeployAura is Script {
 
         key = auraPoolKey(config);
         PoolId poolId = key.toId();
-        (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
-        if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(poolId);
+        if (routerAlreadyDeployed) {
+            AuraRouter existingRouter = AuraRouter(config.predictedRouter);
+            if (address(existingRouter.poolManager()) != config.poolManager) {
+                revert AddressMismatch(config.poolManager, address(existingRouter.poolManager()));
+            }
+            if (PoolId.unwrap(existingRouter.auraPoolId()) != PoolId.unwrap(poolId)) revert InvalidConfiguration();
+        }
+        if (hookAlreadyDeployed) {
+            _requireHookDeployment(config, AuraHook(config.minedHook));
+            (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
+            if (sqrtPriceX96 != 0 && sqrtPriceX96 != config.initialSqrtPriceX96) {
+                revert AuraPoolInitializationMismatch(poolId, config.initialSqrtPriceX96, sqrtPriceX96);
+            }
+        } else {
+            (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
+            if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(poolId);
+        }
     }
 
     function auraPoolKey(AuraDeploymentConfig memory config) public pure returns (PoolKey memory) {
@@ -225,6 +290,7 @@ contract DeployAura is Script {
                 config.fee,
                 config.tickSpacing,
                 IAuraSettlementVerifier(config.verifier),
+                config.initializationAuthority,
                 config.callbackProxy,
                 config.expectedRvmId,
                 config.initialSqrtPriceX96
@@ -250,12 +316,51 @@ contract DeployAura is Script {
         return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), factory, salt, initcodeHash)))));
     }
 
+    function _requireHookDeployment(AuraDeploymentConfig memory config, AuraHook hook) internal view {
+        if (address(hook).code.length == 0) revert MissingCode(address(hook));
+        _requireCodeHash(address(hook), config.hookRuntimeCodeHash);
+        bytes memory initcode = hookInitcode(config);
+        if (address(hook) != computeCreate2Address(config.create2Factory, config.hookSalt, keccak256(initcode))) {
+            revert AddressMismatch(config.minedHook, address(hook));
+        }
+        requireHookFlags(address(hook));
+        if (address(hook.auraRouter()) != config.predictedRouter) {
+            revert AddressMismatch(config.predictedRouter, address(hook.auraRouter()));
+        }
+        if (address(hook.settlementVerifier()) != config.verifier) {
+            revert AddressMismatch(config.verifier, address(hook.settlementVerifier()));
+        }
+        if (address(hook.poolManager()) != config.poolManager) {
+            revert AddressMismatch(config.poolManager, address(hook.poolManager()));
+        }
+        if (PoolId.unwrap(hook.auraPoolId()) != PoolId.unwrap(auraPoolKey(config).toId())) {
+            revert InvalidConfiguration();
+        }
+        if (hook.initializationAuthority() != config.initializationAuthority) {
+            revert AddressMismatch(config.initializationAuthority, hook.initializationAuthority());
+        }
+        if (hook.reactiveCallbackProxy() != config.callbackProxy) {
+            revert AddressMismatch(config.callbackProxy, hook.reactiveCallbackProxy());
+        }
+        if (hook.expectedRvmId() != config.expectedRvmId) {
+            revert AddressMismatch(config.expectedRvmId, hook.expectedRvmId());
+        }
+        if (hook.approvedInitialSqrtPriceX96() != config.initialSqrtPriceX96) {
+            revert InvalidInitialSqrtPrice(hook.approvedInitialSqrtPriceX96());
+        }
+    }
+
     function _requireCode(address account) internal view {
         if (account.code.length == 0) revert MissingCode(account);
     }
 
     function _requireNoCode(address account) internal view {
         if (account == address(0) || account.code.length != 0) revert UnexpectedCode(account);
+    }
+
+    function _requireCodeHash(address account, bytes32 expected) internal view {
+        bytes32 actual = account.codehash;
+        if (actual != expected) revert CodeHashMismatch(account, expected, actual);
     }
 
     function _requireNonce(address deployer, uint64 expected) internal view {
@@ -265,6 +370,10 @@ contract DeployAura is Script {
 
     function _requireCreationCodeHash(bytes32 artifact, bytes32 expected, bytes32 actual) internal pure {
         if (actual != expected) revert CreationCodeHashMismatch(artifact, expected, actual);
+    }
+
+    function _requireRuntimeCodeHash(bytes32 artifact, bytes32 expected, bytes32 actual) internal pure {
+        if (actual != expected) revert RuntimeCodeHashMismatch(artifact, expected, actual);
     }
 
     function requireHookFlags(address hook) public pure {

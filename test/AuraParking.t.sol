@@ -29,7 +29,8 @@ abstract contract AuraParkingBase is BaseTest {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
 
-    uint160 internal constant FLAGS = uint160(Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
+    uint160 internal constant FLAGS =
+        uint160(Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG);
     uint128 internal constant AMOUNT = 1 ether;
     uint128 internal constant MINIMUM = 0.9 ether;
 
@@ -58,6 +59,7 @@ abstract contract AuraParkingBase is BaseTest {
             verifier,
             address(this),
             address(this),
+            address(this),
             Constants.SQRT_PRICE_1_1
         );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
@@ -75,10 +77,12 @@ abstract contract AuraParkingBase is BaseTest {
             verifier,
             address(this),
             address(this),
+            address(this),
             Constants.SQRT_PRICE_1_1
         );
         assertEq(address(hook), mined);
         poolId = key.toId();
+        poolManager.initialize(key, Constants.SQRT_PRICE_1_1);
         int24 lower = TickMath.minUsableTick(key.tickSpacing);
         int24 upper = TickMath.maxUsableTick(key.tickSpacing);
         (uint256 amount0, uint256 amount1) = LiquidityAmounts.getAmountsForLiquidity(
@@ -123,6 +127,7 @@ contract AuraParkingTest is AuraParkingBase {
 
     function test_permissionsAndMinedAddress() public view {
         Hooks.Permissions memory permissions = hook.getHookPermissions();
+        assertTrue(permissions.beforeInitialize);
         assertTrue(permissions.beforeSwap);
         assertTrue(permissions.beforeSwapReturnDelta);
         assertEq(uint160(address(hook)) & Hooks.ALL_HOOK_MASK, FLAGS);
