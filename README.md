@@ -361,7 +361,7 @@ broadcast, pool initialization, or funds.
 | --- | --- |
 | Git | Current stable release |
 | Foundry | `1.7.1` |
-| Node.js | `^20.19.0` or `>=22.12.0` |
+| Node.js | `^22.22.2`, `^24.15.0`, or `>=26.0.0` |
 | npm | Included with supported Node.js |
 
 ### 1. Clone the repository
@@ -484,7 +484,7 @@ npm run build
 | Replay resistance | Used solution hashes cannot settle again |
 | Claim safety | Failed recipient transfers do not consume claims |
 | Recovery | Unsettled owners retain a permissionless timeout refund |
-| Deployment guard | Preflight rejects an already initialized final pool |
+| Deployment guard | Preflight pins initialization authority and approved `sqrtPriceX96`; hook `beforeInitialize` gates one-time pool initialization after deployment |
 
 ## Partner integrations
 

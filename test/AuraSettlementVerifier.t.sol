@@ -6,6 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 
 import {AuraHook} from "../src/AuraHook.sol";
 import {AuraRouter} from "../src/AuraRouter.sol";
@@ -135,14 +136,26 @@ contract AuraSettlementVerifierTest is AuraParkingBase {
             int24(60),
             invalidVerifier,
             address(this),
-            address(this)
+            address(this),
+            address(this),
+            Constants.SQRT_PRICE_1_1
         );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
         AuraRouter otherRouter = new AuraRouter(poolManager, PoolKey(currency0, currency1, 3000, 60, IHooks(mined)));
         assertEq(address(otherRouter), predictedRouter);
         vm.expectRevert(AuraHook.InvalidSettlementVerifier.selector);
         new AuraHook{salt: salt}(
-            poolManager, otherRouter, currency0, currency1, 3000, 60, invalidVerifier, address(this), address(this)
+            poolManager,
+            otherRouter,
+            currency0,
+            currency1,
+            3000,
+            60,
+            invalidVerifier,
+            address(this),
+            address(this),
+            address(this),
+            Constants.SQRT_PRICE_1_1
         );
     }
 

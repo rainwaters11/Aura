@@ -136,7 +136,7 @@ If an invariant fails, preserve the seed and counterexample in the issue or PR e
 
 ## 7. `hook-miner`
 
-The required permissions are `BEFORE_SWAP_FLAG` and `BEFORE_SWAP_RETURNS_DELTA_FLAG`.
+The required permissions are `BEFORE_INITIALIZE_FLAG`, `BEFORE_SWAP_FLAG`, and `BEFORE_SWAP_RETURNS_DELTA_FLAG`.
 
 Local mining example:
 
@@ -299,7 +299,7 @@ Approved command pattern:
 ```bash
 forge script script/DeployAura.s.sol:DeployAura \
   --rpc-url "$UNICHAIN_SEPOLIA_RPC" \
-  --broadcast \
+  --broadcast --slow \
   --verify \
   --verifier blockscout \
   --verifier-url https://unichain-sepolia.blockscout.com/api/ \
