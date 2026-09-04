@@ -199,10 +199,16 @@ contract DeployAura is Script {
         );
         _requireCreationCodeHash(HOOK_ARTIFACT, config.hookCreationCodeHash, keccak256(type(AuraHook).creationCode));
         _requireRuntimeCodeHash(
-            VERIFIER_RUNTIME_ARTIFACT, config.verifierRuntimeCodeHash, keccak256(type(AuraSettlementVerifier).runtimeCode)
+            VERIFIER_RUNTIME_ARTIFACT,
+            config.verifierRuntimeCodeHash,
+            keccak256(type(AuraSettlementVerifier).runtimeCode)
         );
-        _requireRuntimeCodeHash(ROUTER_RUNTIME_ARTIFACT, config.routerRuntimeCodeHash, keccak256(type(AuraRouter).runtimeCode));
-        _requireRuntimeCodeHash(HOOK_RUNTIME_ARTIFACT, config.hookRuntimeCodeHash, keccak256(type(AuraHook).runtimeCode));
+        _requireRuntimeCodeHash(
+            ROUTER_RUNTIME_ARTIFACT, config.routerRuntimeCodeHash, keccak256(type(AuraRouter).runtimeCode)
+        );
+        _requireRuntimeCodeHash(
+            HOOK_RUNTIME_ARTIFACT, config.hookRuntimeCodeHash, keccak256(type(AuraHook).runtimeCode)
+        );
 
         _requireCode(config.poolManager);
         _requireCode(config.currency0);
