@@ -57,7 +57,8 @@ abstract contract AuraParkingBase is BaseTest {
             int24(60),
             verifier,
             address(this),
-            address(this)
+            address(this),
+            Constants.SQRT_PRICE_1_1
         );
         (address mined, bytes32 salt) = HookMiner.find(address(this), FLAGS, type(AuraHook).creationCode, args);
 
@@ -65,12 +66,19 @@ abstract contract AuraParkingBase is BaseTest {
         router = new AuraRouter(poolManager, key);
         assertEq(address(router), predictedRouter);
         hook = new AuraHook{salt: salt}(
-            poolManager, router, currency0, currency1, 3000, 60, verifier, address(this), address(this)
+            poolManager,
+            router,
+            currency0,
+            currency1,
+            3000,
+            60,
+            verifier,
+            address(this),
+            address(this),
+            Constants.SQRT_PRICE_1_1
         );
         assertEq(address(hook), mined);
         poolId = key.toId();
-
-        poolManager.initialize(key, Constants.SQRT_PRICE_1_1);
         int24 lower = TickMath.minUsableTick(key.tickSpacing);
         int24 upper = TickMath.maxUsableTick(key.tickSpacing);
         (uint256 amount0, uint256 amount1) = LiquidityAmounts.getAmountsForLiquidity(
