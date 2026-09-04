@@ -54,6 +54,8 @@ contract DeployAura is Script {
     error CreationCodeHashMismatch(bytes32 artifact, bytes32 expected, bytes32 actual);
     error RuntimeCodeHashMismatch(bytes32 artifact, bytes32 expected, bytes32 actual);
     error NonceDrift(uint64 expected, uint64 actual);
+    error MissingCreate2RecoveryEvidence();
+    error UnexpectedCreate2RecoveryEvidence(bytes32 transactionHash);
     error AddressMismatch(address expected, address actual);
     error HookPermissionMismatch(address hook);
     error Create2DeploymentFailed();
@@ -145,6 +147,7 @@ contract DeployAura is Script {
             initialSqrtPriceX96: uint160(initialSqrtPriceX96Value),
             deployer: vm.envAddress("AURA_DEPLOYER"),
             deployerStartingNonce: uint64(startingNonceValue),
+            reviewedCreate2FailureTxHash: vm.envBytes32("AURA_REVIEWED_CREATE2_FAILURE_TX_HASH"),
             create2Factory: vm.envAddress("AURA_CREATE2_FACTORY"),
             verifier: vm.envAddress("AURA_VERIFIER"),
             predictedRouter: vm.envAddress("AURA_PREDICTED_ROUTER"),
@@ -270,7 +273,7 @@ contract DeployAura is Script {
             (uint160 sqrtPriceX96,,,) = IPoolManager(config.poolManager).getSlot0(poolId);
             if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(poolId);
         }
-        _requireDeploymentNonce(config.deployer, expectedNonce, hookAlreadyDeployed);
+        _requireDeploymentNonce(config, expectedNonce, hookAlreadyDeployed);
     }
 
     function auraPoolKey(AuraDeploymentConfig memory config) public pure returns (PoolKey memory) {
@@ -372,17 +375,30 @@ contract DeployAura is Script {
         if (actual != expected) revert NonceDrift(expected, actual);
     }
 
-    function _requireDeploymentNonce(address deployer, uint64 expected, bool exactHookAlreadyDeployed) internal view {
-        uint64 actual = vm.getNonce(deployer);
-        if (actual == expected) return;
+    function _requireDeploymentNonce(AuraDeploymentConfig memory config, uint64 expected, bool exactHookAlreadyDeployed)
+        internal
+        view
+    {
+        uint64 actual = vm.getNonce(config.deployer);
+        if (actual == expected) {
+            if (config.reviewedCreate2FailureTxHash != bytes32(0)) {
+                revert UnexpectedCreate2RecoveryEvidence(config.reviewedCreate2FailureTxHash);
+            }
+            return;
+        }
 
         // During a `--slow` broadcast, an identical permissionless CREATE2 call
         // may land after the router receipt but before the deployer's factory
         // transaction. The deployer's raw factory call then reverts and consumes
         // exactly one nonce. A rerun may continue to guarded initialization only
         // after the existing hook passed every code, address, flag, and immutable
-        // check above. No other nonce drift is accepted.
-        if (exactHookAlreadyDeployed && expected != type(uint64).max && actual == expected + 1) return;
+        // check above and the manifest names the operator-reviewed failed factory
+        // transaction. No unrelated wallet activity or other nonce drift is
+        // accepted as implicit recovery evidence.
+        if (exactHookAlreadyDeployed && expected != type(uint64).max && actual == expected + 1) {
+            if (config.reviewedCreate2FailureTxHash == bytes32(0)) revert MissingCreate2RecoveryEvidence();
+            return;
+        }
 
         revert NonceDrift(expected, actual);
     }

@@ -215,9 +215,13 @@ simulation and the deployer's factory transaction, `--slow` stops after the
 deployer's raw factory transaction reverts and consumes one nonce. A new
 read-only preflight may accept exactly that one additional nonce only after the
 verifier, router, and existing hook pass all approved code, address, flag,
-PoolId, and immutable checks; the recovery run then records only the guarded
-initialization. Missing or mismatched hook code, or any further nonce drift,
-quarantines the entire tuple.
+PoolId, and immutable checks and the typed manifest names the exact
+operator-reviewed failed factory transaction. Its public receipt must prove the
+approved deployer, starting nonce plus two, approved CREATE2 factory, failed
+status, and approved `salt || hook initcode` input. The recovery run then records
+only the guarded initialization. A fresh run requires a zero recovery hash;
+missing evidence, mismatched hook code, or any further nonce drift quarantines
+the entire tuple.
 Repository rollback is a revert of this deployment-package commit; immutable
 on-chain contracts have no destructive rollback.
 

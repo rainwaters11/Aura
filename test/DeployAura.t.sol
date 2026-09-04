@@ -97,6 +97,7 @@ contract DeployAuraTest is Test {
             initialSqrtPriceX96: INITIAL_SQRT_PRICE_X96,
             deployer: DEPLOYER,
             deployerStartingNonce: STARTING_NONCE,
+            reviewedCreate2FailureTxHash: bytes32(0),
             create2Factory: script.DETERMINISTIC_DEPLOYMENT_PROXY(),
             verifier: vm.computeCreateAddress(DEPLOYER, STARTING_NONCE),
             predictedRouter: vm.computeCreateAddress(DEPLOYER, STARTING_NONCE + 1),
@@ -251,6 +252,7 @@ contract DeployAuraTest is Test {
         // The deployer's subsequently reverted factory transaction consumed its
         // nonce before `--slow` stopped the original broadcast.
         vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
+        config.reviewedCreate2FailureTxHash = keccak256("reviewed failed CREATE2 transaction");
         runner.setConfig(config);
 
         (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) = runner.run();
@@ -260,6 +262,27 @@ contract DeployAuraTest is Test {
         assertEq(address(hook), config.minedHook);
         assertTrue(hook.auraPoolInitialized());
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
+    }
+
+    function test_identicalFactoryFrontRunRecoveryRequiresReviewedFailureTransaction() public {
+        _deployCoreWithoutInitialization();
+        vm.setNonce(DEPLOYER, STARTING_NONCE + 3);
+        runner.setConfig(config);
+
+        vm.expectRevert(DeployAura.MissingCreate2RecoveryEvidence.selector);
+        runner.run();
+    }
+
+    function test_freshDeploymentRejectsStaleCreate2RecoveryEvidence() public {
+        config.reviewedCreate2FailureTxHash = keccak256("stale failed CREATE2 transaction");
+        runner.setConfig(config);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.UnexpectedCreate2RecoveryEvidence.selector, config.reviewedCreate2FailureTxHash
+            )
+        );
+        runner.run();
     }
 
     function test_consumedFactoryNonceRequiresExactPredeployedHook() public {
@@ -620,6 +643,7 @@ contract DeployAuraTest is Test {
         vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(c.initialSqrtPriceX96));
         vm.setEnv("AURA_DEPLOYER", vm.toString(c.deployer));
         vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString(c.deployerStartingNonce));
+        vm.setEnv("AURA_REVIEWED_CREATE2_FAILURE_TX_HASH", vm.toString(c.reviewedCreate2FailureTxHash));
         vm.setEnv("AURA_CREATE2_FACTORY", vm.toString(c.create2Factory));
         vm.setEnv("AURA_VERIFIER", vm.toString(c.verifier));
         vm.setEnv("AURA_PREDICTED_ROUTER", vm.toString(c.predictedRouter));
