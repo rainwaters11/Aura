@@ -110,14 +110,15 @@ contract DeployAuraTest is Test {
             routerCreationCodeHash: keccak256(type(AuraRouter).creationCode),
             hookCreationCodeHash: keccak256(type(AuraHook).creationCode),
             verifierRuntimeCodeHash: keccak256(type(AuraSettlementVerifier).runtimeCode),
-            routerRuntimeCodeHash: keccak256(type(AuraRouter).runtimeCode),
-            hookRuntimeCodeHash: keccak256(type(AuraHook).runtimeCode),
+            routerRuntimeCodeHash: bytes32(uint256(1)),
+            hookRuntimeCodeHash: bytes32(uint256(1)),
             compilerVersion: "0.8.30",
             optimizer: true,
             optimizerRuns: 200,
             viaIr: false
         });
         (config.hookSalt, config.minedHook) = script.findHookSalt(config, 200_000);
+        (config.routerRuntimeCodeHash, config.hookRuntimeCodeHash) = _deriveRuntimeCodeHashes(config);
     }
 
     function test_deploysExactConstructorsPredictionsFactorySaltFlagsAndInitializesPool() public {
@@ -532,6 +533,27 @@ contract DeployAuraTest is Test {
         assertEq(address(hook).codehash, config.hookRuntimeCodeHash);
         assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
         assertFalse(hook.auraPoolInitialized());
+    }
+
+    function _deriveRuntimeCodeHashes(AuraDeploymentConfig memory cfg)
+        internal
+        returns (bytes32 routerRuntimeCodeHash, bytes32 hookRuntimeCodeHash)
+    {
+        uint256 snapshotId = vm.snapshotState();
+        PoolKey memory key = script.auraPoolKey(cfg);
+
+        vm.startPrank(cfg.deployer);
+        new AuraSettlementVerifier();
+        new AuraRouter(IPoolManager(cfg.poolManager), key);
+        (bool success,) = cfg.create2Factory.call(abi.encodePacked(cfg.hookSalt, script.hookInitcode(cfg)));
+        vm.stopPrank();
+
+        assertTrue(success);
+        routerRuntimeCodeHash = cfg.predictedRouter.codehash;
+        hookRuntimeCodeHash = cfg.minedHook.codehash;
+
+        bool reverted = vm.revertToState(snapshotId);
+        assertTrue(reverted);
     }
 
     function _setEnvironment(AuraDeploymentConfig memory c) internal {

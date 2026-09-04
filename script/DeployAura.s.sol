@@ -203,12 +203,6 @@ contract DeployAura is Script {
             config.verifierRuntimeCodeHash,
             keccak256(type(AuraSettlementVerifier).runtimeCode)
         );
-        _requireRuntimeCodeHash(
-            ROUTER_RUNTIME_ARTIFACT, config.routerRuntimeCodeHash, keccak256(type(AuraRouter).runtimeCode)
-        );
-        _requireRuntimeCodeHash(
-            HOOK_RUNTIME_ARTIFACT, config.hookRuntimeCodeHash, keccak256(type(AuraHook).runtimeCode)
-        );
 
         _requireCode(config.poolManager);
         _requireCode(config.currency0);
