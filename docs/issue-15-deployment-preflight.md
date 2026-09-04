@@ -87,7 +87,7 @@ was requested or printed.
 | --- | --- | --- | --- | --- |
 | 1 | `AuraSettlementVerifier` | Unichain Sepolia | None | `0x` |
 | 2 | `AuraRouter` | Unichain Sepolia | canonical PoolManager; immutable PoolKey containing the **predicted** AuraHook, sorted currencies, fee, and tick spacing | `(address,(address,address,uint24,int24,address))` |
-| 3 | `AuraHook` | Unichain Sepolia, CREATE2 | PoolManager, deployed router, currencies, fee, tick spacing, deployed verifier, callback proxy, expected RVM ID | `(address,address,address,address,uint24,int24,address,address,address)` |
+| 3 | `AuraHook` | Unichain Sepolia, CREATE2 | PoolManager, deployed router, currencies, fee, tick spacing, deployed verifier, callback proxy, expected RVM ID, approved initial sqrt price | `(address,address,address,address,uint24,int24,address,address,address,uint160)` |
 
 `AuraClearingMath` is internally linked into creation bytecode and is not a
 separate deployment. The canonical PoolManager, currencies, callback proxy, and
@@ -104,14 +104,16 @@ The address cycle is resolved as follows:
 2. calculate the verifier CREATE address and router CREATE address from that
    nonce and the exact transaction order;
 3. build the router PoolKey with a candidate hook address;
-4. build AuraHook initcode with the predicted router and verifier addresses and
-   mine the CREATE2 salt;
+4. build AuraHook initcode with the predicted router/verifier addresses plus the
+   approved initial sqrt price, then mine the CREATE2 salt;
 5. rebuild the router constructor with the mined hook address and assert the
    predicted router address is unchanged (CREATE addresses depend on sender and
    nonce, not initcode);
 6. deploy verifier, router, then hook through the canonical CREATE2 deployer;
-7. compare every deployed immutable and runtime code hash before considering
-   pool initialization.
+7. during CREATE2 hook construction, derive the final immutable PoolKey, reject
+   any preinitialized PoolId, and initialize PoolManager at the approved
+   `sqrtPriceX96`;
+8. compare every deployed immutable and runtime code hash.
 
 ### Normative production components absent at this commit
 
@@ -170,10 +172,12 @@ forge script script/DeployAura.s.sol:DeployAura \
 
 The `DeployAura` dry run must reject any chain other than 1301, print only
 public configuration, assert code at all external dependencies, assert currency
-ordering and the exact USDC address, require the immutable fee `3000` and tick
-spacing `60`, mine and recheck `0x0088`, and emit a reviewable deployment plan.
-Environment integers must be range-checked at full width before narrowing, and
-the starting nonce must leave room for both predicted CREATE deployments.
+ordering and the exact USDC address, require the immutable fee `3000`, tick
+spacing `60`, and approved initial sqrt price, mine and recheck `0x0088`, and
+emit a reviewable deployment plan. Environment integers must be range-checked at
+full width before narrowing, including nonzero/width/TickMath bounds for
+`AURA_INITIAL_SQRT_PRICE_X96`, and the starting nonce must leave room for both
+predicted CREATE deployments.
 Omitting `--broadcast` is mandatory. The dry run is not deployment approval and
 does not replace the production solution-builder preflight below.
 
@@ -275,16 +279,17 @@ maximum deployment gas from the successful 1301 dry run
 ```
 
 The current Core alone would require three deployment transactions (verifier,
-router, CREATE2 hook). The complete frozen production system requires additional
+router, CREATE2 hook with atomic pool initialization). The complete frozen
+production system requires additional
 inbox and Reactive dispatcher deployments and configuration/funding
-transactions, so an exact total cannot be stated at this commit. Pool
-initialization and liquidity are separate transactions and explicitly excluded
-from preflight and deployment approval unless named.
+transactions, so an exact total cannot be stated at this commit. Liquidity
+funding remains a separate transaction and is explicitly excluded from
+preflight and deployment approval unless named.
 
-The script rejects an initialized final PoolId during preflight. AuraHook also
-reads that PoolId's PoolManager `slot0` in its constructor and rejects a nonzero
-`sqrtPriceX96`, making the decisive guard atomic with CREATE2 hook deployment if
-pool state changes after simulation but before broadcast.
+The script rejects an initialized final PoolId during preflight. AuraHook then
+rechecks that PoolId inside CREATE2 construction and calls
+`PoolManager.initialize` with the approved price in the same transaction,
+making pool preinitialization or initialization races revert atomically.
 
 Immediately before any separately approved future pool-initialization
 transaction, read the final PoolId's PoolManager `slot0` again and stop if its
@@ -326,7 +331,7 @@ available may Misty provide the explicit written approval in the following form:
 Approve DeployAura from <commit> to Unichain Sepolia chain 1301,
 using deployer <public address>, expected AuraHook <public address>,
 for <exact transaction count> transactions and at most <exact test ETH>.
-Do not initialize or fund the pool.
+Do not fund the pool with liquidity.
 ```
 
 Any approval lacking one of those fields, or naming a different commit/address,

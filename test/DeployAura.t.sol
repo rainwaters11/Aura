@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
@@ -13,11 +14,26 @@ import {AuraRouter} from "../src/AuraRouter.sol";
 import {AuraSettlementVerifier} from "../src/AuraSettlementVerifier.sol";
 
 contract PoolManagerSlot0Mock {
+    using PoolIdLibrary for PoolKey;
+
     mapping(bytes32 slot => bytes32 value) internal words;
     uint256 public initializeCalls;
+    PoolId public lastInitializedPoolId;
+    uint160 public lastInitializedSqrtPriceX96;
 
     function extsload(bytes32 slot) external view returns (bytes32) {
         return words[slot];
+    }
+
+    function initialize(PoolKey memory key, uint160 sqrtPriceX96) external returns (int24) {
+        PoolId poolId = key.toId();
+        bytes32 slot = keccak256(abi.encode(PoolId.unwrap(poolId), uint256(6)));
+        if (uint160(uint256(words[slot])) != 0) revert("already initialized");
+        words[slot] = bytes32(uint256(sqrtPriceX96));
+        initializeCalls++;
+        lastInitializedPoolId = poolId;
+        lastInitializedSqrtPriceX96 = sqrtPriceX96;
+        return 0;
     }
 
     function setSlot0(PoolId poolId, uint160 sqrtPriceX96) external {
@@ -48,6 +64,7 @@ contract DeployAuraTest is Test {
     address internal constant CALLBACK_PROXY = address(0xCA11BAC);
     address internal constant RVM_ID = address(0xB0B);
     uint64 internal constant STARTING_NONCE = 7;
+    uint160 internal constant INITIAL_SQRT_PRICE_X96 = 79228162514264337593543950336;
 
     function setUp() public {
         vm.chainId(1301);
@@ -72,6 +89,7 @@ contract DeployAuraTest is Test {
             currency1: script.UNICHAIN_SEPOLIA_WETH(),
             fee: 3000,
             tickSpacing: 60,
+            initialSqrtPriceX96: INITIAL_SQRT_PRICE_X96,
             deployer: DEPLOYER,
             deployerStartingNonce: STARTING_NONCE,
             create2Factory: script.DETERMINISTIC_DEPLOYMENT_PROXY(),
@@ -93,7 +111,7 @@ contract DeployAuraTest is Test {
         (config.hookSalt, config.minedHook) = script.findHookSalt(config, 200_000);
     }
 
-    function test_deploysExactConstructorsPredictionsFactorySaltAndFlagsWithoutInitializingPool() public {
+    function test_deploysExactConstructorsPredictionsFactorySaltFlagsAndInitializesPool() public {
         runner.setConfig(config);
         bytes32 poolManagerCodeHashBefore = script.UNICHAIN_SEPOLIA_POOL_MANAGER().codehash;
 
@@ -116,7 +134,9 @@ contract DeployAuraTest is Test {
         assertEq(hook.expectedRvmId(), RVM_ID);
         assertEq(PoolId.unwrap(hook.auraPoolId()), PoolId.unwrap(router.auraPoolId()));
         assertEq(script.UNICHAIN_SEPOLIA_POOL_MANAGER().codehash, poolManagerCodeHashBefore);
-        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 1);
+        assertEq(PoolId.unwrap(PoolManagerSlot0Mock(config.poolManager).lastInitializedPoolId()), PoolId.unwrap(hook.auraPoolId()));
+        assertEq(PoolManagerSlot0Mock(config.poolManager).lastInitializedSqrtPriceX96(), config.initialSqrtPriceX96);
     }
 
     function test_uninitializedPredictedPoolIdPassesPreflight() public view {
@@ -158,6 +178,21 @@ contract DeployAuraTest is Test {
 
         // Broadcasts are separate public transactions, so nonce rollback is not a safety property here.
         // The constructor-level invariant is that CREATE2 cannot leave a hook deployed after slot0 initializes.
+        assertEq(config.verifier.code.length, 0);
+        assertEq(config.predictedRouter.code.length, 0);
+        assertEq(config.minedHook.code.length, 0);
+        assertEq(PoolManagerSlot0Mock(config.poolManager).initializeCalls(), 0);
+    }
+
+    function test_poolInitializationRaceDuringBroadcastRevertsAtomically() public {
+        runner.setConfig(config);
+        bytes memory initializeCalldata =
+            abi.encodeWithSelector(PoolManagerSlot0Mock.initialize.selector, script.auraPoolKey(config), config.initialSqrtPriceX96);
+        vm.mockCallRevert(config.poolManager, initializeCalldata, bytes("race"));
+
+        vm.expectRevert(DeployAura.Create2DeploymentFailed.selector);
+        runner.run();
+
         assertEq(config.verifier.code.length, 0);
         assertEq(config.predictedRouter.code.length, 0);
         assertEq(config.minedHook.code.length, 0);
@@ -349,6 +384,41 @@ contract DeployAuraTest is Test {
         script.loadConfig();
     }
 
+    function test_loadConfigRejectsZeroInitialSqrtPrice() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", "0");
+        vm.expectRevert(abi.encodeWithSelector(DeployAura.InvalidInitialSqrtPrice.selector, 0));
+        script.loadConfig();
+    }
+
+    function test_loadConfigRejectsOversizedInitialSqrtPriceThatAliasesApprovedValue() public {
+        _setEnvironment(config);
+        vm.setEnv(
+            "AURA_INITIAL_SQRT_PRICE_X96", vm.toString((uint256(1) << 160) + uint256(config.initialSqrtPriceX96))
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DeployAura.InvalidInitialSqrtPrice.selector, (uint256(1) << 160) + uint256(config.initialSqrtPriceX96)
+            )
+        );
+        script.loadConfig();
+    }
+
+    function test_loadConfigRejectsOutOfRangeInitialSqrtPrice() public {
+        _setEnvironment(config);
+        vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(uint256(TickMath.MIN_SQRT_PRICE)));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployAura.InitialSqrtPriceOutOfRange.selector, uint256(TickMath.MIN_SQRT_PRICE))
+        );
+        script.loadConfig();
+
+        vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(uint256(TickMath.MAX_SQRT_PRICE)));
+        vm.expectRevert(
+            abi.encodeWithSelector(DeployAura.InitialSqrtPriceOutOfRange.selector, uint256(TickMath.MAX_SQRT_PRICE))
+        );
+        script.loadConfig();
+    }
+
     function test_rejectsWrongFactoryAndPermissionBits() public {
         config.create2Factory = address(0xFACADE);
         vm.expectRevert(DeployAura.InvalidConfiguration.selector);
@@ -373,6 +443,29 @@ contract DeployAuraTest is Test {
         script.validatePreflight(config);
     }
 
+    function test_rejectsOutOfRangeInitialSqrtPriceInTypedConfig() public {
+        config.initialSqrtPriceX96 = 1;
+        vm.expectRevert(abi.encodeWithSelector(DeployAura.InitialSqrtPriceOutOfRange.selector, uint256(1)));
+        script.validatePreflight(config);
+    }
+
+    function test_initialSqrtPriceAffectsHookInitcodeHashSaltAndPredictedAddress() public {
+        bytes32 initcodeHash = keccak256(script.hookInitcode(config));
+        bytes32 salt = config.hookSalt;
+        address predicted = script.computeCreate2Address(config.create2Factory, salt, initcodeHash);
+
+        AuraDeploymentConfig memory changed = config;
+        changed.initialSqrtPriceX96 = config.initialSqrtPriceX96 + 1;
+        bytes32 changedInitcodeHash = keccak256(script.hookInitcode(changed));
+        (bytes32 changedSalt, address changedHook) = script.findHookSalt(changed, 200_000);
+
+        assertNotEq(changedInitcodeHash, initcodeHash);
+        assertNotEq(changedSalt, salt);
+        assertEq(predicted, config.minedHook);
+        assertEq(changedHook, script.computeCreate2Address(changed.create2Factory, changedSalt, changedInitcodeHash));
+        assertNotEq(changedHook, predicted);
+    }
+
     function _setEnvironment(AuraDeploymentConfig memory c) internal {
         vm.setEnv("AURA_CHAIN_ID", vm.toString(c.chainId));
         vm.setEnv("AURA_POOL_MANAGER", vm.toString(c.poolManager));
@@ -380,6 +473,7 @@ contract DeployAuraTest is Test {
         vm.setEnv("AURA_CURRENCY1", vm.toString(c.currency1));
         vm.setEnv("AURA_FEE", vm.toString(c.fee));
         vm.setEnv("AURA_TICK_SPACING", vm.toString(c.tickSpacing));
+        vm.setEnv("AURA_INITIAL_SQRT_PRICE_X96", vm.toString(c.initialSqrtPriceX96));
         vm.setEnv("AURA_DEPLOYER", vm.toString(c.deployer));
         vm.setEnv("AURA_DEPLOYER_STARTING_NONCE", vm.toString(c.deployerStartingNonce));
         vm.setEnv("AURA_CREATE2_FACTORY", vm.toString(c.create2Factory));

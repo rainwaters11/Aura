@@ -5,6 +5,7 @@ import {Script, console2} from "forge-std/Script.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -18,7 +19,7 @@ import {IAuraRouter} from "../src/interfaces/IAuraRouter.sol";
 import {IAuraSettlementVerifier} from "../src/interfaces/IAuraSettlementVerifier.sol";
 import {AuraDeploymentConfig} from "./config/AuraDeploymentConfig.sol";
 
-/// @notice Mines and deploys the three-contract Aura Core without pool initialization.
+/// @notice Mines and deploys the three-contract Aura Core.
 /// @dev The CREATE2 factory accepts calldata `salt || initcode`, as used by the
 ///      deterministic deployment proxy at 0x4e59...956C.
 contract DeployAura is Script {
@@ -53,6 +54,8 @@ contract DeployAura is Script {
     error HookPermissionMismatch(address hook);
     error Create2DeploymentFailed();
     error AuraPoolAlreadyInitialized(PoolId poolId);
+    error InvalidInitialSqrtPrice(uint256 value);
+    error InitialSqrtPriceOutOfRange(uint256 value);
 
     function run() external returns (AuraSettlementVerifier verifier, AuraRouter router, AuraHook hook) {
         AuraDeploymentConfig memory config = loadConfig();
@@ -88,6 +91,7 @@ contract DeployAura is Script {
     function loadConfig() public view virtual returns (AuraDeploymentConfig memory config) {
         uint256 feeValue = vm.envUint("AURA_FEE");
         int256 tickSpacingValue = vm.envInt("AURA_TICK_SPACING");
+        uint256 initialSqrtPriceX96Value = vm.envUint("AURA_INITIAL_SQRT_PRICE_X96");
         uint256 startingNonceValue = vm.envUint("AURA_DEPLOYER_STARTING_NONCE");
         uint256 optimizerRunsValue = vm.envUint("AURA_OPTIMIZER_RUNS");
 
@@ -96,6 +100,12 @@ contract DeployAura is Script {
             tickSpacingValue < type(int24).min || tickSpacingValue > type(int24).max
                 || tickSpacingValue != AURA_TICK_SPACING
         ) revert InvalidConfiguration();
+        if (initialSqrtPriceX96Value == 0 || initialSqrtPriceX96Value > type(uint160).max) {
+            revert InvalidInitialSqrtPrice(initialSqrtPriceX96Value);
+        }
+        if (
+            initialSqrtPriceX96Value <= TickMath.MIN_SQRT_PRICE || initialSqrtPriceX96Value >= TickMath.MAX_SQRT_PRICE
+        ) revert InitialSqrtPriceOutOfRange(initialSqrtPriceX96Value);
         if (startingNonceValue > uint256(type(uint64).max) - 2) revert InvalidConfiguration();
         if (optimizerRunsValue > type(uint32).max || optimizerRunsValue != 200) revert InvalidConfiguration();
 
@@ -106,6 +116,7 @@ contract DeployAura is Script {
             currency1: vm.envAddress("AURA_CURRENCY1"),
             fee: uint24(feeValue),
             tickSpacing: int24(tickSpacingValue),
+            initialSqrtPriceX96: uint160(initialSqrtPriceX96Value),
             deployer: vm.envAddress("AURA_DEPLOYER"),
             deployerStartingNonce: uint64(startingNonceValue),
             create2Factory: vm.envAddress("AURA_CREATE2_FACTORY"),
@@ -142,6 +153,10 @@ contract DeployAura is Script {
                 || keccak256(bytes(config.compilerVersion)) != keccak256("0.8.30") || !config.optimizer
                 || config.optimizerRuns != 200 || config.viaIr
         ) revert InvalidConfiguration();
+        if (config.initialSqrtPriceX96 == 0) revert InvalidInitialSqrtPrice(0);
+        if (
+            config.initialSqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || config.initialSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE
+        ) revert InitialSqrtPriceOutOfRange(config.initialSqrtPriceX96);
 
         _requireCreationCodeHash(
             VERIFIER_ARTIFACT, config.verifierCreationCodeHash, keccak256(type(AuraSettlementVerifier).creationCode)
@@ -212,7 +227,8 @@ contract DeployAura is Script {
                 config.tickSpacing,
                 IAuraSettlementVerifier(config.verifier),
                 config.callbackProxy,
-                config.expectedRvmId
+                config.expectedRvmId,
+                config.initialSqrtPriceX96
             )
         );
     }

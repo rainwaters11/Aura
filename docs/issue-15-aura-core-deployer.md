@@ -9,8 +9,9 @@ Target: Unichain Sepolia, chain ID 1301
 ## Scope and stop decision
 
 This package prepares deployment of only `AuraSettlementVerifier`, `AuraRouter`,
-and `AuraHook`. It does not initialize a pool and contains no liquidity, token
-transfer, verification, signing, or public broadcast action. Solution inbox,
+and `AuraHook`. The hook deployment atomically initializes the immutable pool at
+the operator-approved `AURA_INITIAL_SQRT_PRICE_X96`, but contains no liquidity,
+token transfer, verification, signing, or public broadcast action. Solution inbox,
 Reactive dispatcher/automation, solver infrastructure or competition, frontend,
 Circle/Arc integration, and multi-pool behavior are deferred non-goals.
 
@@ -42,9 +43,11 @@ The pool configuration is immutable and pinned to fee `3000` with tick spacing
 before hook-address mining or deployment simulation.
 
 Environment integers are read at full width and checked before narrowing. In
-particular, fee, tick spacing, deployer starting nonce, and optimizer runs reject
-out-of-range values rather than truncating them. The nonce must also leave two
-slots for the verifier and router CREATE address predictions.
+particular, fee, tick spacing, initial sqrt price, deployer starting nonce, and
+optimizer runs reject out-of-range values rather than truncating them. The
+initial price must be nonzero, fit `uint160`, and lie strictly inside TickMath
+bounds; the nonce must also leave two slots for the verifier and router CREATE
+address predictions.
 
 The compiler fields document the intended build profile, but are not trusted as
 proof of the bytecode that Foundry actually compiled. The manifest must also
@@ -63,6 +66,7 @@ Approved fixed values are:
 | currency0 | Circle testnet USDC `0x31d0220469e10c4E71834a79b1f276d740d3768F` |
 | currency1 | OP Stack WETH9 predeploy `0x4200000000000000000000000000000000000006` |
 | fee / tick spacing | `3000` / `60` |
+| initial sqrt price (`AURA_INITIAL_SQRT_PRICE_X96`) | required approved nonzero `uint160` strictly inside TickMath bounds |
 | CREATE2 factory | deterministic deployment proxy `0x4e59b44847b379578588920cA78FbF26c0B4956C` |
 | compiler | Solidity `0.8.30`, optimizer enabled, 200 runs, `via_ir = false` |
 
@@ -91,14 +95,16 @@ After those are fixed:
 
 1. verifier is predicted at `CREATE(deployer, startingNonce)`;
 2. router is predicted at `CREATE(deployer, startingNonce + 1)`;
-3. hook initcode is built with those predictions and the complete immutable
-   constructor tuple;
+3. hook initcode is built with those predictions, the approved initial sqrt
+   price, and the complete immutable constructor tuple;
 4. the first salt within the bounded search whose address has low bits `0x0088`
    is recorded;
 5. verifier and router are created in that order and nonce/address checked after
    each transaction;
-6. the hook is deployed by calling the same factory with `salt || initcode`, then
-   its address, code, and permission bits are checked.
+6. the hook is deployed by calling the same factory with `salt || initcode`; the
+   constructor derives the final immutable PoolKey, rejects a preinitialized
+   PoolId, and initializes that PoolId at the approved sqrt price atomically;
+7. the hook address, code, initialization result, and permission bits are checked.
 
 This is specifically Uniswap v4 hook-address mining plus router-address
 prediction. It is not a generic deterministic-deployment policy.
@@ -166,7 +172,8 @@ The absence of `--broadcast` is mandatory. The script uses `startBroadcast` only
 to make Foundry construct the correct unsigned transaction sequence during
 simulation; it cannot publish without the CLI broadcast flag. Expected ordering
 is verifier CREATE, router CREATE, then CREATE2-factory call. Pool initialization
-is not present in the script.
+occurs atomically inside the CREATE2 AuraHook constructor using the approved
+initial price.
 
 For verification rehearsal, constructor arguments are exactly:
 
@@ -174,7 +181,8 @@ For verification rehearsal, constructor arguments are exactly:
 AuraSettlementVerifier: 0x
 AuraRouter: abi.encode(poolManager, (currency0,currency1,fee,tickSpacing,minedHook))
 AuraHook: abi.encode(poolManager,predictedRouter,currency0,currency1,fee,
-                     tickSpacing,verifier,callbackProxy,expectedRvmId)
+                     tickSpacing,verifier,callbackProxy,expectedRvmId,
+                     initialSqrtPriceX96)
 ```
 
 ## Required balance and recovery
@@ -185,12 +193,11 @@ gas multiplier, and multiply by an approved maximum fee per gas. The recommended
 balance is that deployment maximum plus an operator reserve; pool funding is
 separate and is not authorized by this package.
 
-On any mismatch, stop before the next transaction and never initialize a pool.
-The script rejects an already-initialized final PoolId during preflight, and the
-AuraHook constructor repeats that check in the CREATE2 transaction so pool
-initialization between simulation and broadcast cannot produce a usable hook.
-A separately approved future pool-initialization transaction must check the
-final PoolId's PoolManager `slot0` again immediately before it is sent.
+On any mismatch, stop before the next transaction. The script rejects an
+already-initialized final PoolId during preflight, and the AuraHook constructor
+repeats that check and performs pool initialization in the same CREATE2
+transaction, so preinitialization between simulation and broadcast reverts the
+entire hook deployment atomically.
 A verifier with matching verified bytecode may be reused only under a newly
 reviewed manifest. A router whose hook deployment failed is abandoned with its
 PoolKey. Any hook address/code/immutable mismatch quarantines the entire tuple.
@@ -205,8 +212,9 @@ Provide and approve exactly:
 Use deployer <public address> at finalized nonce <nonce>, callback proxy
 <public address> with runtime code hash <bytes32>, and expected RVM identity
 <public address>, with approved verifier/router/hook creation-code hashes
-<bytes32>/<bytes32>/<bytes32>, to mine the Issue 15 AuraHook address and run an
-unsigned, non-broadcast Unichain Sepolia fork simulation from <exact commit>.
+<bytes32>/<bytes32>/<bytes32>, and approved initial sqrt price
+<uint160>, to mine the Issue 15 AuraHook address and run an unsigned,
+non-broadcast Unichain Sepolia fork simulation from <exact commit>.
 ```
 
 That approval authorizes only read-only RPC access and unsigned simulation. It

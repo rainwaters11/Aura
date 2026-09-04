@@ -12,6 +12,7 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {IAuraRouter} from "./interfaces/IAuraRouter.sol";
@@ -94,6 +95,7 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
     error UnauthorizedRouter();
     error InvalidPool();
     error AuraPoolAlreadyInitialized(PoolId poolId);
+    error InvalidInitialSqrtPriceX96(uint160 sqrtPriceX96);
     error ExactOutputUnsupported();
     error MalformedOrderData();
     error InvalidOrder();
@@ -182,7 +184,8 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
         int24 tickSpacing,
         IAuraSettlementVerifier verifier,
         address callbackProxy,
-        address rvmId
+        address rvmId,
+        uint160 initialSqrtPriceX96
     ) BaseHook(manager) {
         if (address(router) == address(0)) revert InvalidRouter();
         if (address(router.poolManager()) != address(manager)) revert InvalidPoolManager();
@@ -198,10 +201,15 @@ contract AuraHook is BaseAsyncSwap, IUnlockCallback, ReentrancyGuardTransient {
         _currency1 = currency1;
         _fee = fee;
         _tickSpacing = tickSpacing;
-        auraPoolId = PoolKey(currency0, currency1, fee, tickSpacing, this).toId();
+        if (initialSqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || initialSqrtPriceX96 >= TickMath.MAX_SQRT_PRICE) {
+            revert InvalidInitialSqrtPriceX96(initialSqrtPriceX96);
+        }
+        PoolKey memory key = PoolKey(currency0, currency1, fee, tickSpacing, this);
+        auraPoolId = key.toId();
         if (PoolId.unwrap(router.auraPoolId()) != PoolId.unwrap(auraPoolId)) revert InvalidPool();
         (uint160 sqrtPriceX96,,,) = manager.getSlot0(auraPoolId);
         if (sqrtPriceX96 != 0) revert AuraPoolAlreadyInitialized(auraPoolId);
+        manager.initialize(key, initialSqrtPriceX96);
     }
 
     function settleBatch(address rvmId, BatchSolution calldata solution) external {

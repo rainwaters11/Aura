@@ -9,6 +9,7 @@ struct AuraDeploymentConfig {
     address currency1;
     uint24 fee;
     int24 tickSpacing;
+    uint160 initialSqrtPriceX96;
     address deployer;
     uint64 deployerStartingNonce;
     address create2Factory;
